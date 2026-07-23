@@ -1,4 +1,4 @@
-# finpilot
+# ik-os-next
 
 A template for building custom bootc operating system images based on the lessons from [Universal Blue](https://universal-blue.org/) and [Bluefin](https://projectbluefin.io). It is designed to be used manually, but is optimized to be bootstraped by GitHub Copilot. After set up you'll have your own custom Linux.
 
@@ -12,28 +12,31 @@ Instead, you create your own OS repository based on this template, allowing full
 
 ## What Makes this Raptor Different?
 
-Here are the changes from [Base Image Name]. This image is based on [Bluefin/Bazzite/Aurora/etc] and includes these customizations:
+`ik-os-next` is a custom bootc image built on **Fedora Silverblue 44** (GNOME), with
+Bluefin's shared desktop configuration from `@projectbluefin/common` and Homebrew
+integration from `@ublue-os/brew` layered on top. The customizations below are what
+distinguish it from the stock base.
 
 ### Added Packages (Build-time)
 
-- **System packages**: tmux, micro, mosh - [brief explanation of why]
+- **System packages**: `tmux` — terminal multiplexer, always available system-wide. [Add more in `build/10-build.sh`.]
 
 ### Added Applications (Runtime)
 
-- **CLI Tools (Homebrew)**: neovim, helix - [brief explanation]
-- **GUI Apps (Flatpak)**: Spotify, Thunderbird - [brief explanation]
+- **CLI Tools (Homebrew)**: _none yet_ — add to `custom/brew/default.Brewfile`, install via `ujust install-default-apps`.
+- **GUI Apps (Flatpak)**: _none yet_ — add to `custom/flatpaks/default.preinstall`, installed on first boot.
 
 ### Removed/Disabled
 
-- List anything removed from base image
+- Nothing removed from the base image yet.
 
 ### Configuration Changes
 
-- Any systemd services enabled/disabled
-- Desktop environment changes
-- Other notable modifications
+- **Services enabled**: `podman.socket`, `brew-setup.service`, `brew-update.timer`, `brew-upgrade.timer`.
+- **`/opt`** symlinked to `/var/opt` (writeable by default).
+- Desktop environment: unchanged (GNOME from Silverblue + Bluefin common config).
 
-_Last updated: [date]_
+_Last updated: 2026-07-23_
 
 > Replace the placeholders above with your actual customizations whenever you add or remove packages, apps, or configuration. This section is what tells users how your image differs from the base.
 
