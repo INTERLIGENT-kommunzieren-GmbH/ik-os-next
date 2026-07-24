@@ -35,6 +35,10 @@ distinguish it from the stock base.
 - **Services enabled**: `podman.socket`, `brew-setup.service`, `brew-update.timer`, `brew-upgrade.timer`.
 - **`/opt`** symlinked to `/var/opt` (writeable by default).
 - Desktop environment: unchanged (GNOME from Silverblue + Bluefin common config).
+- **Base image pinned** to `silverblue:44.20260706.0` (kernel `7.0.14-201.fc44`), the
+  last Silverblue 44 base on the stable 7.0 kernel series. The 7.1.x kernels
+  (0707.0 onward) cause a PID 1 segfault / "Attempted to kill init!" panic under
+  KVM. Renovate holds this pin; bump it manually once 7.1.x is stable.
 
 _Last updated: 2026-07-24_
 
