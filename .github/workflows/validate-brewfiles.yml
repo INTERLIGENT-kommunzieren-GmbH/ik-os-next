@@ -21,14 +21,23 @@ jobs:
         run: |
           echo "Validating Brewfiles in custom/brew/ directory..."
 
-          find "custom/brew" -iname '*\.Brewfile*' -print0 | \
-            while IFS= read -r -d '' brewfile ; do
-              echo "::group:: ===$(basename "$brewfile")==="
-              if brew bundle check --file="$brewfile" 2>&1; then
-                echo "✓ $brewfile is valid"
+          # Verify each referenced formula/cask EXISTS on Homebrew.
+          # We intentionally do not use `brew bundle check`, which verifies
+          # packages are *installed* — CI runners start with nothing installed,
+          # so that would fail for any real entry. Existence is what we can check.
+          rc=0
+          while IFS= read -r -d '' brewfile ; do
+            echo "::group:: ===$(basename "$brewfile")==="
+            while IFS= read -r pkg ; do
+              [ -z "$pkg" ] && continue
+              if brew info "$pkg" >/dev/null 2>&1 ; then
+                echo "✓ $pkg exists"
               else
-                echo "✗ $brewfile validation failed"
-                exit 1
+                echo "✗ $pkg not found on Homebrew"
+                rc=1
               fi
-              echo "::endgroup::"
-            done
+            done < <(grep -oE '^[[:space:]]*(brew|cask)[[:space:]]+"[^"]+"' "$brewfile" | sed -E 's/.*"([^"]+)".*/\1/')
+            echo "::endgroup::"
+          done < <(find "custom/brew" -iname '*.Brewfile*' -print0)
+
+          exit "$rc"
