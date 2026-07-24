@@ -326,10 +326,15 @@ _run-vm $target_image $tag $type $config:
     #!/usr/bin/bash
     set -eoux pipefail
 
-    # Determine the image file based on the type
+    # Determine the image file based on the type.
+    # bootc-image-builder writes each type to its own subdir, and these do not
+    # all match output/<type>/: qcow2 -> qcow2/disk.qcow2, raw -> image/disk.raw,
+    # iso -> bootiso/install.iso.
     image_file="output/${type}/disk.${type}"
     if [[ $type == iso ]]; then
         image_file="output/bootiso/install.iso"
+    elif [[ $type == raw ]]; then
+        image_file="output/image/disk.raw"
     fi
 
     # Build the image if it does not exist

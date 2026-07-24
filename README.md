@@ -374,9 +374,14 @@ Test your changes before pushing:
 
 ```bash
 just build              # Build container image
-just build-qcow2        # Build VM disk image
-just run-vm-qcow2       # Test in browser-based VM
+just build-raw          # Build VM disk image
+just run-vm-raw         # Test in browser-based VM
 ```
+
+> **Use the `raw` target for local VM testing, not `qcow2`.** The `qemux/qemu`
+> runner behind `run-vm-*` cannot parse the GPT of the bootc-built `qcow2`
+> image and silently falls back to downloading and booting Alpine Linux
+> instead of your image. The `raw` disk boots your image correctly.
 
 ## Community
 
