@@ -5,6 +5,9 @@
 
 # Uncomment the apps you want installed on first boot:
 
+[Flatpak Preinstall com.github.tchx84.Flatseal]
+Branch=stable
+
 ;[Flatpak Preinstall org.mozilla.firefox]
 ;Branch=stable
 

@@ -19,12 +19,12 @@ distinguish it from the stock base.
 
 ### Added Packages (Build-time)
 
-- **System packages**: `tmux` — terminal multiplexer, always available system-wide. [Add more in `build/10-build.sh`.]
+- **System packages**: `tmux` — terminal multiplexer, always available system-wide. `htop` — interactive process viewer. [Add more in `build/10-build.sh`.]
 
 ### Added Applications (Runtime)
 
-- **CLI Tools (Homebrew)**: _none yet_ — add to `custom/brew/default.Brewfile`, install via `ujust install-default-apps`.
-- **GUI Apps (Flatpak)**: _none yet_ — add to `custom/flatpaks/default.preinstall`, installed on first boot.
+- **CLI Tools (Homebrew)**: `eza` — modern, colorful replacement for `ls`. Add more to `custom/brew/default.Brewfile`, install via `ujust install-default-apps`.
+- **GUI Apps (Flatpak)**: `Flatseal` (`com.github.tchx84.Flatseal`) — graphical Flatpak permissions manager, installed on first boot (or via `ujust install-flatseal`). Add more to `custom/flatpaks/default.preinstall`.
 
 ### Removed/Disabled
 
@@ -36,7 +36,7 @@ distinguish it from the stock base.
 - **`/opt`** symlinked to `/var/opt` (writeable by default).
 - Desktop environment: unchanged (GNOME from Silverblue + Bluefin common config).
 
-_Last updated: 2026-07-23_
+_Last updated: 2026-07-24_
 
 > Replace the placeholders above with your actual customizations whenever you add or remove packages, apps, or configuration. This section is what tells users how your image differs from the base.
 
