@@ -50,8 +50,12 @@ COPY --from=common /system_files /oci/common
 COPY --from=brew /system_files /oci/brew
 
 # Base Image - GNOME included (Fedora official OSTree desktop)
-# Renovate will keep the digest pin up to date.
-FROM quay.io/fedora-ostree-desktops/silverblue:44@sha256:2b8f8279b3c326e131ad6cb64aa416565053d268a5a337807141f353b0354696
+# Pinned to 44.20260706.0, the last Silverblue 44 base on the stable 7.0 kernel
+# series (kernel 7.0.14-201.fc44). The 7.1.x kernels (0707.0 onward) cause PID 1
+# to segfault -> "Attempted to kill init!" kernel panic under KVM on this host.
+# Renovate is configured (renovate.json) to hold this pin; bump it manually once
+# the 7.1.x series is stable. Bluefin holds its kernel back for the same reason.
+FROM quay.io/fedora-ostree-desktops/silverblue:44.20260706.0@sha256:62c3eb050e322c3c52847929e314dcd5d35089c575eb43596161a2ff67362d08
 
 # Image identity - these define how bootc, fastfetch, and the ublue ecosystem
 # recognize your image. Change these to match your project name.

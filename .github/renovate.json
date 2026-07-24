@@ -49,9 +49,8 @@
       "schedule": ["at any time"]
     },
     {
-      "description": "Do not automatically cross Fedora major releases",
+      "description": "Hold Silverblue base on the stable 7.0 kernel series (pinned to 44.20260706.0 / kernel 7.0.14-201). The 7.1.x kernels panic under KVM on our hardware; bump this pin manually once 7.1.x is stable.",
       "matchDepNames": ["quay.io/fedora-ostree-desktops/silverblue"],
-      "matchUpdateTypes": ["major"],
       "enabled": false
     }
   ]
