@@ -54,6 +54,9 @@ echo "::group:: Install Packages"
 # This ensures the DNF cache is populated for future builds
 dnf5 install -y tmux
 
+# System utilities baked into the image and available on first boot
+dnf5 install -y htop
+
 # Example using COPR with isolated pattern:
 # copr_install_isolated "ublue-os/staging" package-name
 

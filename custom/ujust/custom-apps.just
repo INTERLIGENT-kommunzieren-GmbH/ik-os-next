@@ -79,3 +79,8 @@ install-vscode:
 [group('Apps')]
 install-gimp:
     ujust install-flatpak org.gimp.GIMP
+
+# Install Flatseal (manage Flatpak permissions) via Flatpak
+[group('Apps')]
+install-flatseal:
+    ujust install-flatpak com.github.tchx84.Flatseal
