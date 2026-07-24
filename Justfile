@@ -283,9 +283,18 @@ _build-bib $target_image $tag $type $config: (_rootful_load_image target_image t
       "${target_image}:${tag}"
 
     mkdir -p output
-    sudo mv -f $BUILDTMP/* output/
-    sudo rmdir $BUILDTMP
-    sudo chown -R $USER:$USER output/
+    # bib writes into type-specific entries (e.g. image/, qcow2/, bootiso/ and
+    # a manifest). `mv` cannot overwrite an existing non-empty directory, so a
+    # second build of the same type would fail on e.g. output/image. Remove any
+    # colliding entries first, then move the fresh artifacts into place. Only
+    # entries produced by this build are replaced; others are left untouched.
+    shopt -s nullglob
+    for item in "$BUILDTMP"/*; do
+        sudo rm -rf "output/$(basename "$item")"
+    done
+    sudo mv "$BUILDTMP"/* output/
+    sudo rmdir "$BUILDTMP"
+    sudo chown -R "$USER:$USER" output/
 
 # Podman builds the image from the Containerfile and creates a bootable image
 # Parameters:
