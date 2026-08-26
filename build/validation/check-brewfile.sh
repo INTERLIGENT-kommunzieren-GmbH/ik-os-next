@@ -31,6 +31,25 @@ gh_code() {
     curl "${args[@]}" "$@" 2>/dev/null || echo 000
 }
 
+# formulae.brew.sh, with the HTTP status reported instead of collapsed into a
+# single exit code. `curl -f` cannot tell "this formula does not exist" from "the
+# request failed", and treating the second as the first is how CI once reported
+# that direnv is not in homebrew/core. Retries first, because the usual cause is
+# a blip rather than a real outage.
+api_status() {
+    curl -sSL -o /dev/null -w '%{http_code}' \
+        --retry 3 --retry-delay 2 --retry-all-errors --max-time 30 \
+        "$1" 2>/dev/null || echo 000
+}
+# Prints "yes" / "no" / "unknown". Only "no" is an absent package.
+in_core() {
+    case "$(api_status "https://formulae.brew.sh/api/${1}/${2}.json")" in
+        200) echo yes ;;
+        404) echo no ;;
+        *)   echo unknown ;;
+    esac
+}
+
 strip() { sed -e 's/#.*//' -e 's/[[:space:]]*$//' "$BREWFILE" | grep -v '^[[:space:]]*$'; }
 entries() { strip | sed -nE "s/^${1} \"([^\"]+)\".*/\1/p"; }
 
@@ -90,10 +109,13 @@ for c in "${CASKS[@]}"; do
         echo "  ✓ cask ${short} (${TAP_CASK[$short]})"
     elif [[ -n "${TAP_FORMULA[$short]:-}" ]]; then
         note "cask \"${short}\" is a FORMULA in ${TAP_FORMULA[$short]} — use brew \"${short}\""
-    elif curl -fsSL -o /dev/null "https://formulae.brew.sh/api/cask/${short}.json" 2>/dev/null; then
-        echo "  ✓ cask ${short} (homebrew/cask)"
     else
-        note "cask \"${short}\" is in neither homebrew/cask nor a declared tap"
+        case "$(in_core cask "$short")" in
+            yes) echo "  ✓ cask ${short} (homebrew/cask)" ;;
+            no)  note "cask \"${short}\" is in neither homebrew/cask nor a declared tap" ;;
+            *)   note "cannot verify cask \"${short}\" — formulae.brew.sh did not answer.
+       This is NOT a missing cask; the request failed. Re-run the job." ;;
+        esac
     fi
 done
 
@@ -103,10 +125,13 @@ for b in "${BREWS[@]}"; do
         echo "  ✓ formula ${short} (${TAP_FORMULA[$short]})"
     elif [[ -n "${TAP_CASK[$short]:-}" ]]; then
         note "brew \"${short}\" is a CASK in ${TAP_CASK[$short]} — use cask \"${short}\""
-    elif curl -fsSL -o /dev/null "https://formulae.brew.sh/api/formula/${short}.json" 2>/dev/null; then
-        echo "  ✓ formula ${short} (homebrew/core)"
     else
-        note "brew \"${short}\" is neither in homebrew/core nor a declared tap"
+        case "$(in_core formula "$short")" in
+            yes) echo "  ✓ formula ${short} (homebrew/core)" ;;
+            no)  note "brew \"${short}\" is neither in homebrew/core nor a declared tap" ;;
+            *)   note "cannot verify brew \"${short}\" — formulae.brew.sh did not answer.
+       This is NOT a missing formula; the request failed. Re-run the job." ;;
+        esac
     fi
 done
 
