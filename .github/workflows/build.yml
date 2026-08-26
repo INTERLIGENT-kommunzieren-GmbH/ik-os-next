@@ -124,13 +124,35 @@ jobs:
           wc -l packages.manifest
 
       # SDD §46 — every release ships an SBOM.
+      # syft cannot read podman's local storage. Its podman provider talks to the
+      # podman API socket, which a GitHub runner does not have, so a bare
+      # `ik-os:testing` falls through every other provider and ends up asking
+      # Docker Hub for library/ik-os. Export the image and scan the archive
+      # instead: no daemon, no registry, no credentials.
+      - name: Install syft
+        run: |
+          # Downloaded then run, not piped into sh: a pipeline hides curl's exit
+          # status (the same reason the Containerfile does this for rustup).
+          curl --proto '=https' --tlsv1.2 -sSfo /tmp/syft.sh https://get.anchore.io/syft
+          sudo sh /tmp/syft.sh -b /usr/local/bin
+          rm -f /tmp/syft.sh
+          syft --version
+
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0
-        with:
-          image: ${{ env.IMAGE_NAME }}:${{ env.CHANNEL }}
-          format: spdx-json
-          output-file: ik-os.spdx.json
-          upload-artifact: false
+        run: |
+          echo "disk before export:"; df -h / | tail -1
+          podman save --format oci-archive \
+            -o "${RUNNER_TEMP}/ik-os.oci" "${IMAGE_NAME}:${CHANNEL}"
+          ls -lh "${RUNNER_TEMP}/ik-os.oci"
+          echo "disk after export:"; df -h / | tail -1
+          syft scan "oci-archive:${RUNNER_TEMP}/ik-os.oci" -o spdx-json > ik-os.spdx.json
+          # Reclaimed before the push, which needs the room more than this does.
+          rm -f "${RUNNER_TEMP}/ik-os.oci"
+          test -s ik-os.spdx.json
+          # jq, not grep: "SPDXRef-Package" also appears in every relationship
+          # entry, which overcounts by ~60x (5014 vs 85 on a test image).
+          echo "SBOM: $(wc -c < ik-os.spdx.json) bytes, $(jq '.packages | length' ik-os.spdx.json) packages"
+          echo "disk after cleanup:"; df -h / | tail -1
 
       - name: Upload build metadata
         uses: actions/upload-artifact@v7
