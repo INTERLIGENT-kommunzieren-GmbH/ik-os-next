@@ -29,6 +29,16 @@ podman build -q -t "$TEST_IMG" "$WORK" >/dev/null
 
 policy_error() { grep -qE 'trust policy|rejected by policy|Unknown key' "$1"; }
 
+# Distinguish "the policy refused this" from "this environment cannot run the
+# probe at all". Both print a red cross otherwise, and only one of them is a
+# policy bug — which cost a CI run to work out once already.
+explain() {
+    if grep -q 'unshare' "$1"; then
+        printf '       not a policy failure: skopeo could not create a user namespace.\n'
+        printf '       Ubuntu 24.04 blocks unprivileged userns via AppArmor. Run as root.\n'
+    fi
+}
+
 # 1. containers-storage — what `bootc install to-disk` reads from.
 if skopeo --policy "$POLICY" copy --quiet \
       "containers-storage:localhost/${TEST_IMG}" "oci-archive:${WORK}/probe.tar" \
@@ -36,15 +46,21 @@ if skopeo --policy "$POLICY" copy --quiet \
     ok "containers-storage is readable (bootc install path)"
 else
     no "containers-storage refused: $(tail -1 "${WORK}/e1")"
+    explain "${WORK}/e1"
 fi
 
 # 2. oci-archive — what the installer ISO carries on the medium.
-if [[ -f "${WORK}/probe.tar" ]] && skopeo --policy "$POLICY" copy --quiet \
+if [[ ! -f "${WORK}/probe.tar" ]]; then
+    # Check 1 produces the archive check 2 reads. Saying so beats reporting
+    # "oci-archive refused:" with nothing after the colon.
+    no "oci-archive not tested: check 1 produced no archive to read"
+elif skopeo --policy "$POLICY" copy --quiet \
       "oci-archive:${WORK}/probe.tar" "dir:${WORK}/probe-dir" \
       >"${WORK}/e2" 2>&1 && ! policy_error "${WORK}/e2"; then
     ok "oci-archive is readable (installer ISO path)"
 else
     no "oci-archive refused: $(tail -1 "${WORK}/e2" 2>/dev/null)"
+    explain "${WORK}/e2"
 fi
 
 # 3. The policy must still actually require a signature for the ik-os repo,

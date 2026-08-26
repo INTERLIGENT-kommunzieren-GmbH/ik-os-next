@@ -96,7 +96,14 @@ jobs:
       - name: Container signature policy
         run: |
           sudo apt-get update && sudo apt-get install -y skopeo jq podman
-          ./build/validation/check-policy.sh
+          # As root, unlike locally. The probe reads containers-storage through
+          # skopeo, which needs a user namespace, and Ubuntu 24.04 blocks
+          # unprivileged userns creation (AppArmor). podman has a profile that
+          # permits it and so builds the probe fine; skopeo does not, and fails
+          # with "Error during unshare(...): Operation not permitted".
+          # Root is not a workaround here so much as the honest environment:
+          # `bootc install`, whose policy evaluation this reproduces, is root.
+          sudo REPO="$GITHUB_WORKSPACE" ./build/validation/check-policy.sh
 
       - name: Justfile formatting
         run: |
