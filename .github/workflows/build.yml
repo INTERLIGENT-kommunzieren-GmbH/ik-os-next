@@ -42,6 +42,36 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Before the build, not after: the image embeds config/company/cosign.pub
+      # and refuses anything not signed by its pair (SDD §45). If the two have
+      # drifted, every machine rejects the image — and finding that out after a
+      # 90-minute build and a push is finding it out too late. The private key is
+      # write-only once set, so deriving the public key from it is the only way to
+      # know the two still match.
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+
+      - name: The signing key must match the public key in the image
+        if: github.event_name != 'pull_request'
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+        run: |
+          if [[ -z "$COSIGN_PRIVATE_KEY" ]]; then
+            echo "::error::SIGNING_SECRET is not set. The build would push an"
+            echo "unsigned image that every machine then refuses (SDD §45)."
+            exit 1
+          fi
+          COSIGN_PASSWORD="" cosign public-key --key env://COSIGN_PRIVATE_KEY \
+            > /tmp/from-secret.pub
+          if ! diff -u config/company/cosign.pub /tmp/from-secret.pub; then
+            echo "::error::SIGNING_SECRET does not match config/company/cosign.pub."
+            echo "The image would trust one key and be signed with another."
+            echo "Rotate both together — see docs/releases.md."
+            exit 1
+          fi
+          echo "signing key matches the public key shipped in the image"
+
       - name: Free up disk space
         uses: ublue-os/remove-unwanted-software@v9
         with:
@@ -131,11 +161,8 @@ jobs:
           echo "Pushed ${IMAGE}@${DIGEST}"
 
       # SDD §45 — production images are signed, and signing uses a CI-held key,
-      # never a developer workstation.
-      - name: Install cosign
-        if: github.event_name != 'pull_request'
-        uses: sigstore/cosign-installer@v3
-
+      # never a developer workstation. cosign is installed at the top of the job,
+      # where the key is checked against the one the image embeds.
       - name: Sign the image by digest
         if: github.event_name != 'pull_request'
         env:

@@ -30,6 +30,42 @@ Deployments should pin by digest where possible (SDD §7).
 - `packages.manifest` — every package and version
 - `ik-os.spdx.json` — SBOM, attested to the image with cosign
 
+## Image signing and key rotation (SDD §45)
+
+Every image pushed from `main` is signed with the key in the `SIGNING_SECRET`
+repository secret, and each image embeds the matching **public** key at
+`/etc/pki/containers/ghcr.io-ik-os.pub` (from `config/company/cosign.pub`). A
+machine verifies the image it is about to deploy against the public key its
+*current* image carries.
+
+The two halves must therefore be rotated together, and `build.yml` checks that
+they match in the first seconds of the job rather than after the build:
+
+    cosign public-key --key env://COSIGN_PRIVATE_KEY  ==  config/company/cosign.pub
+
+**The private key cannot be read back out of GitHub.** Repository secrets are
+write-only: not by the API, not by a workflow log, not by the owner. If the only
+copy was the one uploaded at `gh secret set` time, it is gone, and the only
+remedy is rotation. This has already happened once — the key the original ik-os
+repository signs with exists nowhere outside its own secret store.
+
+To rotate:
+
+    COSIGN_PASSWORD="" cosign generate-key-pair          # empty password: CI cannot type one
+    cosign public-key --key cosign.key                   # sanity-check the pair
+    gh secret set SIGNING_SECRET < cosign.key
+    cp cosign.pub config/company/cosign.pub              # commit this
+    # then store cosign.key somewhere durable, NOT only in the secret
+
+Generate it outside the repository. `cosign.key` is in `.gitignore`, but the
+Rule 13 check in `validate.yml` greps the whole tree for `BEGIN … PRIVATE KEY`
+and will flag it locally.
+
+Rotation is safe here because migration is a reinstall rather than a
+`bootc switch` (`docs/migration.md`): the installer carries both the new image
+and the new public key, so a new key never has to be verified by an old one.
+An in-place switch across a key change would be refused.
+
 ## Debian release transitions (SDD §47)
 
 The image tracks the floating `stable` suite. `build/scripts/00-preflight.sh`
