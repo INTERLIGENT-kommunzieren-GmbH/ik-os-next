@@ -1,0 +1,104 @@
+---
+name: Validate
+# SDD §44 — the cheap checks run first so a typo fails in seconds, not after a
+# 40-minute image build.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shell:
+    name: Shell scripts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: shellcheck
+        run: |
+          mapfile -t files < <(
+              find build scripts migration iso tests -type f \
+                   \( -name '*.sh' -o -name 'ik-os' -o -name 'ik-os-*' \) \
+                   ! -name '*.service' | sort
+          )
+          (( ${#files[@]} )) || { echo "::error::no scripts found"; exit 1; }
+          printf '  %s\n' "${files[@]}"
+          shellcheck -x -S warning "${files[@]}"
+          echo "shellcheck clean (${#files[@]} files)"
+
+  packages:
+    name: Package lists
+    runs-on: ubuntu-24.04
+    container: docker.io/library/debian:forky
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate package lists against the Debian archive
+        run: REPO="$GITHUB_WORKSPACE" bash build/validation/check-packages.sh
+
+  brewfile:
+    name: Brewfile
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate the Brewfile against homebrew/core and declared taps
+        # Homebrew only runs on first boot, so a wrong entry here is not caught
+        # by the image build — it fails on every laptop instead.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: REPO="$GITHUB_WORKSPACE" bash build/validation/check-brewfile.sh
+
+  flatpaks:
+    name: Flatpak list
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate system-flatpaks.list against Flathub
+        # Flatpaks install at first boot, so a wrong id cannot fail the build:
+        # the machine just ships without that application. SDD §54 routes every
+        # GUI app through this list, so that is most of the desktop.
+        run: REPO="$GITHUB_WORKSPACE" bash build/validation/check-flatpaks.sh
+
+  policy:
+    name: SDD policy checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: No secrets in the build context (Rule 13)
+        run: |
+          # No empty alternation branch: some greps (ugrep) reject `(A|B|)`.
+          if grep -rlE 'BEGIN [A-Z0-9 ]*PRIVATE KEY' --exclude-dir=.git . ; then
+            echo "::error::a private key is committed to this repository."
+            echo "SDD §27 / Rule 13: secrets are provisioned at enrolment, never shipped."
+            exit 1
+          fi
+          echo "no private keys found"
+      - name: No Fedora or NixOS base (Rules 1, 2)
+        run: |
+          if grep -nE '^FROM .*(fedora|centos|nixos|ubuntu)' Containerfile; then
+            echo "::error::Rule 1 forbids a non-Debian base image."; exit 1
+          fi
+          if grep -rn 'rpm-ostree' --include='*.sh' build/ scripts/ ; then
+            echo "::error::Rule 2 forbids rpm-ostree."; exit 1
+          fi
+          echo "base distribution policy satisfied"
+      - name: Search Light is not reintroduced (Rule 7)
+        run: |
+          if grep -rn 'search-light' desktop/gnome/extensions/enabled.txt packages/; then
+            echo "::error::Rule 7: ArcMenu replaces Search Light."; exit 1
+          fi
+          echo "Rule 7 satisfied"
+      - name: Container signature policy
+        run: |
+          sudo apt-get update && sudo apt-get install -y skopeo jq podman
+          ./build/validation/check-policy.sh
+
+      - name: Justfile formatting
+        run: |
+          curl -sSfL https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+          just --unstable --fmt --check -f Justfile

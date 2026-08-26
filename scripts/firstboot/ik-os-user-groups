@@ -1,0 +1,81 @@
+#!/bin/bash
+# SDD §17, §23, §51 — put human accounts in the groups company policy says they
+# belong to.
+#
+# This is deliberately NOT a step in ik-os-firstboot. That service runs at
+# multi-user.target, but on a fresh install the first account is created later,
+# by gnome-initial-setup inside the GDM session. At firstboot time there is no
+# user to add, so the step would silently succeed and be stamped complete
+# forever. A .path unit on /etc/passwd fires when the account actually appears,
+# which is the only reliable moment.
+#
+# Idempotent by construction: membership is re-derived from /etc/passwd every
+# time and usermod runs only for accounts that are not already members.
+set -euo pipefail
+
+POLICY=/usr/lib/ik-os/policy.env
+# shellcheck disable=SC1090
+[[ -r "$POLICY" ]] && . "$POLICY"
+
+log() { printf '[ik-os-user-groups] %s\n' "$*"; }
+
+# Human accounts, lowest uid first. Accounts with a nologin/false shell are
+# service accounts that happen to sit in the human uid range; skip them.
+mapfile -t USERS < <(
+    awk -F: '$3 >= 1000 && $3 < 65000 && $7 !~ /(nologin|\/false)$/ {print $3":"$1}' \
+        /etc/passwd | sort -t: -k1,1n | cut -d: -f2
+)
+
+if (( ${#USERS[@]} == 0 )); then
+    log "no human accounts yet — will run again when one is created"
+    exit 0
+fi
+
+CHANGED=0
+grant() {
+    local group="$1"; shift
+    getent group "$group" >/dev/null || { log "no '${group}' group — skipping"; return 0; }
+    local u
+    for u in "$@"; do
+        id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx "$group" && continue
+        usermod -aG "$group" "$u"
+        CHANGED=1
+        log "added '${u}' to the '${group}' group"
+    done
+}
+
+# --- lpadmin (SDD §23) -----------------------------------------------------
+# CUPS resolves "Require user @SYSTEM" to SystemGroup, which cupsd.conf sets to
+# lpadmin. Without membership the user can print but cannot add or edit a queue,
+# and SDD §23 requires adding a printer to work without becoming root. Not
+# root-equivalent: it grants printer administration and nothing else.
+grant lpadmin "${USERS[@]}"
+
+# --- docker (SDD §51) ------------------------------------------------------
+# Root-equivalent, so this one is policy-gated.
+case "${DOCKER_GROUP_POLICY:-none}" in
+    first-user) grant docker "${USERS[0]}" ;;
+    all-users)  grant docker "${USERS[@]}" ;;
+    none)       log "DOCKER_GROUP_POLICY=none: docker access is granted manually by IT" ;;
+    *)          log "unknown DOCKER_GROUP_POLICY '${DOCKER_GROUP_POLICY:-}' — granting no docker access" ;;
+esac
+
+if (( CHANGED )); then
+    # Group membership is read at session start, so the session that is open
+    # right now does not have it. Saying so here saves a confusing "permission
+    # denied" on the docker socket and a greyed-out Add Printer button.
+    for u in "${USERS[@]}"; do
+        # --wait because this fires the moment gnome-initial-setup creates the
+        # account, which is before that account has a session bus. Without it the
+        # message was sent into the void every single time.
+        /usr/libexec/ik-os/ik-os-notify --wait 300 "$u" normal "Sign out to finish setup" \
+            "Your account was added to new groups. Docker and printer administration work after you log out and back in." || true
+    done
+    # Membership is read at session start, so a session that was already open
+    # does not have it. Say so rather than letting the user hit a confusing
+    # "permission denied" or a greyed-out Add Printer button.
+    log "affected users must log out and back in for the new groups to apply"
+    log "docker group membership is ROOT-EQUIVALENT — see /usr/share/doc/ik-os/docker-security.md"
+else
+    log "no changes: membership already matches policy"
+fi

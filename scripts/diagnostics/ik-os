@@ -1,0 +1,346 @@
+#!/bin/bash
+# ik-os — company wrapper around bootc (SDD §40, §42, §43, §48, §57).
+set -euo pipefail
+
+RELEASE_ENV=/usr/share/ik-os/release.env
+POLICY_ENV=/usr/lib/ik-os/policy.env
+# Policy first, then the release manifest: facts about the running image must
+# never be shadowed by machine policy.
+# shellcheck disable=SC1090
+[[ -r "$POLICY_ENV" ]] && . "$POLICY_ENV"
+# shellcheck disable=SC1090
+[[ -r "$RELEASE_ENV" ]] && . "$RELEASE_ENV"
+
+bold() { printf '\033[1m%s\033[0m\n' "$*"; }
+kv()   { printf '  %-22s %s\n' "$1" "${2:-unknown}"; }
+need_root() { [[ $EUID -eq 0 ]] || exec sudo -- "$0" "$@"; }
+
+# Secrets must never appear in diagnostics output (SDD §43).
+redact() { sed -E 's/(password|token|secret|key)[=:][^[:space:]]*/\1=<redacted>/Ig'; }
+
+cmd_version() {
+    bold "ik-os"
+    kv "Version"       "${IK_OS_VERSION:-dev}"
+    # The version is stamped per build date, so two builds from the same day
+    # share it. The digest does not -- and it is the value first boot compares
+    # its stamps against (ADR 0010), so it answers both "which build is this"
+    # and "why did provisioning re-run".
+    kv "Image digest"  "$(bootc status --json 2>/dev/null \
+        | jq -r '.status.booted.image.imageDigest // empty' 2>/dev/null)"
+    kv "Built for"     "${IK_OS_CHANNEL:-unknown}"
+    kv "Follows"       "${IK_OS_UPDATE_CHANNEL:-unknown}"
+    kv "Build ID"      "${IK_OS_BUILD_ID:-unknown}"
+    kv "Git commit"    "${IK_OS_GIT_COMMIT:-unknown}"
+    kv "Debian base"   "${DEBIAN_CODENAME:-unknown} (${DEBIAN_VERSION:-?})"
+    kv "Kernel"        "${KERNEL_RELEASE:-$(uname -r)} (${KERNEL_SUITE:-?})"
+    kv "bootc"         "${BOOTC_VERSION:-unknown}"
+}
+
+cmd_status() {
+    cmd_version
+    echo
+    bold "Deployment"
+    if command -v bootc >/dev/null; then
+        bootc status || true
+    else
+        echo "  bootc is not available on this system"
+    fi
+}
+
+cmd_update() {
+    need_root "$@"
+    bold "Fetching the current ${IK_OS_UPDATE_CHANNEL:-stable} image"
+    # SDD §40 — image-based updates only. apt upgrade against the host is not
+    # a supported operation.
+    bootc upgrade "$@"
+    echo
+    echo "A reboot is required to activate the new deployment."
+    echo "The previous deployment stays available for rollback (SDD §41)."
+}
+
+cmd_rollback() {
+    need_root "$@"
+    bold "Rolling back to the previous deployment"
+    # SDD §42 — rollback must never touch persistent user data.
+    bootc rollback
+    echo "Reboot to boot the previous deployment. /home and /var are untouched."
+}
+
+cmd_hardware() {
+    # SDD §48
+    bold "Hardware"
+    kv "Vendor"   "$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null)"
+    kv "Product"  "$(cat /sys/class/dmi/id/product_name 2>/dev/null)"
+    kv "Family"   "$(cat /sys/class/dmi/id/product_family 2>/dev/null)"
+    kv "BIOS"     "$(cat /sys/class/dmi/id/bios_version 2>/dev/null)"
+    kv "Profile"  "$(detect_profile)"
+    echo
+    kv "CPU"      "$(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo)"
+    kv "GPU"      "$(lspci 2>/dev/null | grep -iE 'vga|3d' | cut -d: -f3- | paste -sd'; ' - )"
+    kv "Wi-Fi"    "$(lspci 2>/dev/null | grep -i 'network controller' | cut -d: -f3- | paste -sd'; ' - )"
+    kv "Bluetooth" "$(lsusb 2>/dev/null | grep -i bluetooth | cut -d' ' -f7- | paste -sd'; ' - )"
+    echo
+    bold "Firmware"
+    fwupdmgr get-devices --no-unreported-check 2>/dev/null \
+        | grep -E '^[A-Za-z].*|Current version' | head -40 || echo "  fwupd unavailable"
+}
+
+detect_profile() {
+    # SDD §49 — profiles describe hardware, they do not fork the OS.
+    local product cpu
+    product=$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)
+    cpu=$(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo)
+    case "$product" in
+        *Laptop*|*Framework*) ;;
+        *) echo "unsupported-hardware"; return ;;
+    esac
+    case "$cpu" in
+        *"Core Ultra"*)  echo "framework-core-ultra" ;;
+        *"Ryzen AI"*)    echo "framework-ryzen-ai"   ;;
+        *Ryzen*)         echo "framework-amd"        ;;
+        *Intel*)         echo "framework-intel"      ;;
+        *)               echo "framework-unknown"    ;;
+    esac
+}
+
+cmd_diagnostics() {
+    local bundle="" report
+    [[ "${1:-}" == "--bundle" ]] && bundle="${2:-/var/tmp/ik-os-support-$(date +%Y%m%d-%H%M%S).tar.zst}"
+    report=$(mktemp -t ik-os-diagnostics.XXXXXX)
+
+    # Subshell with `set +e`: every line below is a probe, and probes fail on a
+    # healthy machine (no Secure Boot, no VPN yet, no printer). Under the script
+    # global `set -e` the first one truncates the whole report at exactly the
+    # point where it stops being useful, so the report is collected best-effort.
+    (
+        set +e
+        cmd_version; echo
+        bold "Deployment";     bootc status 2>/dev/null || echo "  bootc unavailable"; echo
+        bold "Secure Boot"
+        kv "State" "$(mokutil --sb-state 2>/dev/null | head -1)"
+        kv "Signed by ik-os" "${SECURE_BOOT_SIGNED:-unknown}"
+        echo
+        cmd_hardware; echo
+        bold "Docker"
+        kv "Engine"  "$(docker version --format '{{.Server.Version}}' 2>/dev/null)"
+        kv "Compose" "$(docker compose version --short 2>/dev/null)"
+        kv "Buildx"  "$(docker buildx version 2>/dev/null | awk '{print $2}')"
+        kv "Policy"  "$(. /usr/lib/ik-os/policy.env 2>/dev/null; echo "${DOCKER_GROUP_POLICY:-none}")"
+        kv "Members" "$(getent group docker | cut -d: -f4)"
+        # The usual cause of "permission denied on /var/run/docker.sock": the
+        # account is in the group but the session predates it.
+        _du="${SUDO_USER:-${USER:-$(id -un)}}"
+        if getent group docker | cut -d: -f4 | tr ',' '\n' | grep -qx "$_du" \
+           && ! id -nG "$_du" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+            kv "Note" "${_du} is in the docker group but this session is not — log out and back in"
+        fi
+        echo
+        bold "Flatpak"
+        kv "Version" "$(flatpak --version 2>/dev/null)"
+        flatpak list --app --columns=application 2>/dev/null | sed 's/^/    /' | head -30
+        echo
+        bold "Homebrew"
+        kv "Version" "$(sudo -u "${SUDO_USER:-${USER:-$(id -un)}}" /home/linuxbrew/.linuxbrew/bin/brew --version 2>/dev/null | head -1)"
+        echo
+        bold "Printing"
+        kv "CUPS" "$(cupsd -v 2>/dev/null || systemctl is-active cups.service)"
+        lpstat -p 2>/dev/null | sed 's/^/    /' || echo "    no queues"
+        echo
+        bold "Networking"
+        nmcli -t -f NAME,TYPE,STATE connection show 2>/dev/null | sed 's/^/    /'
+        kv "VPN profile" "$(nmcli -t -f NAME connection show 2>/dev/null | grep -qx ik-office && echo present || echo 'missing — run ik-os-provision-vpn')"
+        kv "VPN provisioned" "$([[ -r /var/lib/ik-os/vpn/ik-office-cert.pem ]] && echo yes || echo 'no — device certificate not installed (see /usr/share/doc/ik-os/vpn.md)')"
+        echo
+        bold "GNOME"
+        kv "Shell" "$(gnome-shell --version 2>/dev/null)"
+        kv "Session" "${XDG_SESSION_TYPE:-unknown}"
+        echo "    enabled extensions:"
+        gsettings get org.gnome.shell enabled-extensions 2>/dev/null | tr ',' '\n' | sed 's/^/      /'
+        echo
+        bold "First boot"
+        # Stamps are scoped per image (ADR 0010): an image-scoped step records
+        # the image it was satisfied on, so "done" alone is not the answer -- the
+        # question is done for WHICH image. A stamp naming an older image is a
+        # step that will re-run, and an empty one is a pre-ADR-0010 stamp.
+        booted_digest=$(bootc status --json 2>/dev/null \
+            | jq -r '.status.booted.image.imageDigest // empty' 2>/dev/null)
+        if [[ -d /var/lib/ik-os/firstboot ]]; then
+            kv "booted image" "${booted_digest:-unknown}"
+            if [[ -r /var/lib/ik-os/firstboot/.last-run-image ]]; then
+                kv "provisioned for" "$(cat /var/lib/ik-os/firstboot/.last-run-image)"
+            else
+                kv "provisioned for" "never completed a run"
+            fi
+            for f in /var/lib/ik-os/firstboot/*.failed; do
+                [[ -e "$f" ]] || continue
+                kv "FAILED: $(basename "$f" .failed)" "$(cat "$f")"
+            done
+            for f in /var/lib/ik-os/firstboot/*.done; do
+                [[ -e "$f" ]] || continue
+                stamped=$(cat "$f" 2>/dev/null)
+                case "$stamped" in
+                    once) kv "ok: $(basename "$f" .done)" "permanent" ;;
+                    "")   kv "ok: $(basename "$f" .done)" "no image recorded (will re-run once)" ;;
+                    "$booted_digest")
+                          kv "ok: $(basename "$f" .done)" "current image" ;;
+                    *)    if [[ -z "$booted_digest" ]]; then
+                              kv "ok: $(basename "$f" .done)" "$stamped"
+                          else
+                              kv "ok: $(basename "$f" .done)" "for a previous image (will re-run)"
+                          fi ;;
+                esac
+            done
+        else
+            echo "  first boot has not run yet"
+        fi
+        echo
+        bold "Out-of-band provisioning"
+        # These are NOT firstboot steps and leave no stamp in the directory
+        # above: they cannot be ordered by boot targets, because
+        # gnome-initial-setup creates the first account from inside the GDM
+        # session, long after multi-user.target. They are triggered by
+        # /etc/passwd changing instead, so report them from the units.
+        for u in ik-os-hostname ik-os-user-groups ik-os-homebrew; do
+            st=$(systemctl show -p ExecMainStatus --value "${u}.service" 2>/dev/null)
+            if systemctl is-failed --quiet "${u}.service" 2>/dev/null; then
+                kv "$u" "FAILED (exit ${st:-?}) — journalctl -u ${u} -b"
+            elif [[ "${st:-0}" != 0 ]]; then
+                kv "$u" "last run exited ${st}"
+            else
+                kv "$u" "ok"
+            fi
+        done
+        # RemainAfterExit must stay off on these, or the boot-time run (which
+        # finds no account) leaves the unit active and every later path
+        # activation is silently ignored — the bug that stopped Homebrew
+        # installing at all.
+        for u in ik-os-user-groups ik-os-homebrew; do
+            if systemctl show -p RemainAfterExit --value "${u}.service" 2>/dev/null | grep -qi '^yes$'; then
+                kv "WARNING" "${u}.service sets RemainAfterExit; path triggers will be ignored"
+            fi
+        done
+        kv "Homebrew installed" "$([[ -x /home/linuxbrew/.linuxbrew/bin/brew ]] && echo yes || echo 'no — journalctl -u ik-os-homebrew -b')"
+        echo
+        bold "Failed units"
+        systemctl --failed --no-legend | sed 's/^/    /' || true
+    ) | redact > "$report"
+
+    if [[ -z "$bundle" ]]; then
+        cat "$report"
+        rm -f "$report"
+        return 0
+    fi
+
+    tar --zstd -cf "$bundle" \
+        -C "$(dirname "$report")" "$(basename "$report")" \
+        -C / usr/share/ik-os/release.env usr/share/ik-os/packages.manifest 2>/dev/null
+    rm -f "$report"
+    echo "Support bundle written to ${bundle}"
+    echo "Secrets are redacted; review it before sending if you are unsure."
+}
+
+cmd_ssh() {
+    # SDD §50 keeps sshd off a deployed machine: the image ships openssh-client
+    # only, ssh.service is masked, and the firewalld zone does not open ssh.
+    # This subcommand exists so debugging a machine does not mean remembering
+    # four commands, not to make sshd normal. Everything it does is transient:
+    # the server comes from `bootc usr-overlay` and the firewall rule is runtime
+    # only, so a reboot returns the machine to the shipped posture.
+    local action="${1:-status}"
+    case "$action" in
+      status)
+        if systemctl is-active --quiet ssh 2>/dev/null; then
+            kv "sshd" "running"
+            ss -tlnp 2>/dev/null | awk '/:22 /{print "    " $4}' | sort -u
+            kv "firewall" "$(firewall-cmd --query-service=ssh 2>/dev/null || echo 'ssh not opened')"
+            echo "  Disable again with: ik-os ssh disable"
+        else
+            kv "sshd" "not running"
+            echo "  Enable for debugging with: ik-os ssh enable"
+        fi
+        ;;
+      enable)
+        need_root ssh enable
+        if [[ ! -x /usr/sbin/sshd ]]; then
+            echo "==> openssh-server is not in the image; installing transiently"
+            echo "    (bootc usr-overlay: discarded on reboot)"
+            bootc usr-overlay || { echo "could not add a transient /usr overlay" >&2; exit 1; }
+            apt-get update -qq && apt-get install -y -qq openssh-server \
+                || { echo "could not install openssh-server" >&2; exit 1; }
+        fi
+        systemctl unmask ssh 2>/dev/null || true
+        systemctl enable --now ssh || { echo "could not start sshd" >&2; exit 1; }
+        # Runtime only, deliberately: --permanent would outlive the debugging.
+        firewall-cmd --add-service=ssh >/dev/null 2>&1 \
+            || echo "warning: could not open ssh in firewalld; connections may be dropped"
+        echo
+        echo "sshd is running. This machine now has a listening port it does not"
+        echo "normally have (SDD §50). It reverts on reboot; to undo it now:"
+        echo "    ik-os ssh disable"
+        ;;
+      disable)
+        need_root ssh disable
+        systemctl disable --now ssh 2>/dev/null || true
+        systemctl mask ssh 2>/dev/null || true
+        firewall-cmd --remove-service=ssh >/dev/null 2>&1 || true
+        echo "sshd stopped, masked, and removed from the firewall zone."
+        echo "A package installed via usr-overlay is gone after the next reboot."
+        ;;
+      *) echo "usage: ik-os ssh [status|enable|disable]" >&2; exit 2 ;;
+    esac
+}
+
+cmd_selftest() {
+    # SDD §63 — the booted-system half of the acceptance criteria. The other
+    # half runs against the image at build time (build/validation).
+    local dir=/usr/share/ik-os/tests
+    [[ -d "$dir" ]] || { echo "no test suites installed at ${dir}" >&2; exit 1; }
+    local -a suites
+    if (( $# )); then
+        suites=( "$@" )
+    else
+        suites=( boot provisioning docker printing hardware )
+    fi
+    local s rc=0
+    for s in "${suites[@]}"; do
+        if [[ ! -x "${dir}/${s}/test-${s}.sh" ]]; then
+            echo "no such suite: ${s}" >&2; rc=2; continue
+        fi
+        "${dir}/${s}/test-${s}.sh" || rc=1
+        echo
+    done
+    return "$rc"
+}
+
+usage() {
+    cat <<'EOF'
+ik-os — Interligent developer workstation
+
+  ik-os version                 Image, kernel and build identity
+  ik-os status                  Version plus the current bootc deployment
+  ik-os update                  Fetch and stage the current channel image
+  ik-os rollback                Boot the previous deployment
+  ik-os hardware                Detected hardware and firmware
+  ik-os diagnostics [--bundle]  Full report; --bundle writes a support archive
+  ik-os selftest [suite...]     Run the booted acceptance suites (SDD §63);
+                                default: boot provisioning docker printing hardware
+  ik-os ssh [status|enable|disable]
+                                Temporarily allow SSH in for debugging.
+                                Transient: reverts on reboot (SDD §50)
+
+Updates are image-based. `apt upgrade` against the host is not supported.
+EOF
+}
+
+case "${1:-}" in
+    version)     shift; cmd_version "$@" ;;
+    status)      shift; cmd_status "$@" ;;
+    update)      shift; cmd_update "$@" ;;
+    rollback)    shift; cmd_rollback "$@" ;;
+    hardware)    shift; cmd_hardware "$@" ;;
+    diagnostics) shift; cmd_diagnostics "$@" ;;
+    selftest)    shift; cmd_selftest "$@" ;;
+    ssh)         shift; cmd_ssh "$@" ;;
+    -h|--help|help|"") usage ;;
+    *) echo "unknown command: $1" >&2; usage >&2; exit 2 ;;
+esac

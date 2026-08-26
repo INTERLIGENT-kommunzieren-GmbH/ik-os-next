@@ -1,0 +1,27 @@
+# SDD §14 — the dash (dash-to-dock reads org.gnome.shell favorite-apps).
+#
+# These are *defaults*: a developer may rearrange their own dock. Not listed in
+# locks/, deliberately.
+#
+# dconf can only set the whole array, so this replaces Debian's default rather
+# than appending to it. That default is
+# 10_gnome-shell.gschema.override in the gnome-shell package:
+#
+#   firefox-esr, org.gnome.Evolution, org.gnome.Nautilus, org.gnome.Software,
+#   org.gnome.TextEditor, org.gnome.Calculator, org.gnome.Yelp
+#
+# Five of those seven are not in this image — firefox-esr is not installed (the
+# browsers are Flatpaks), gnome-software is deliberately replaced by Bazaar, and
+# Evolution, Calculator and Yelp are not shipped at all. GNOME drops a favourite
+# whose .desktop is missing without a word, so the dash currently shows Files and
+# Text Editor and nothing else. The two live entries are kept below; the dead
+# ones are dropped, which changes nothing a user can see.
+#
+# Firefox and Bazaar are Flatpaks and therefore only appear after first boot
+# installs them. Until then GNOME ignores them exactly as it ignored the entries
+# above — the dash fills in rather than breaking. 50-desktop.sh checks every id
+# here against the image or config/desktop/system-flatpaks.list, so a typo fails
+# the build instead of silently vanishing from the dock.
+
+[org/gnome/shell]
+favorite-apps=['org.mozilla.firefox.desktop', 'io.github.kolunmi.Bazaar.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.TextEditor.desktop']

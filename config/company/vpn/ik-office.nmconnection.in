@@ -1,0 +1,46 @@
+# NetworkManager OpenVPN profile for the ik-office VPN.
+# Rendered by scripts/firstboot/ik-os-provision-vpn: @UUID@ is replaced with a
+# per-device UUID and the file is written to
+# /etc/NetworkManager/system-connections/ik-office.nmconnection (mode 0600).
+#
+# password-flags=4 / username-flags=4 mean "always ask": no credentials are
+# stored in this file (SDD §27). Users may still save them to their keyring
+# after the first successful connection.
+[connection]
+id=ik-office
+uuid=@UUID@
+type=vpn
+autoconnect=false
+
+[vpn]
+service-type=org.freedesktop.NetworkManager.openvpn
+connection-type=password-tls
+dev=tun
+dev-type=tun
+remote=@VPN_REMOTE@
+port=@VPN_PORT@
+remote-cert-tls=server
+cipher=AES-128-GCM
+tls-cipher=TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256
+tls-version-min=1.2
+allow-compression=no
+reneg-seconds=0
+cert-pass-flags=0
+challenge-response-flags=2
+password-flags=4
+username-flags=4
+ca=/var/lib/ik-os/vpn/ik-office-ca.pem
+cert=/var/lib/ik-os/vpn/ik-office-cert.pem
+key=/var/lib/ik-os/vpn/ik-office-key.pem
+tls-crypt=/var/lib/ik-os/vpn/ik-office-tls-crypt.pem
+
+[ipv4]
+method=auto
+dns=@VPN_DNS@
+dns-search=@VPN_DNS_SEARCH@
+dns-priority=-50
+
+[ipv6]
+method=auto
+
+[proxy]

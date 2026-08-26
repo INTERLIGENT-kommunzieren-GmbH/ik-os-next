@@ -1,0 +1,19 @@
+{
+  "default": [{ "type": "insecureAcceptAnything" }],
+
+  "transports": {
+    "docker": {
+      "ghcr.io/interligent-kommunzieren-gmbh/ik-os": [
+        {
+          "type": "sigstoreSigned",
+          "keyPath": "/etc/pki/containers/ghcr.io-ik-os.pub",
+          "signedIdentity": { "type": "matchRepository" }
+        }
+      ]
+    },
+    "containers-storage": { "": [{ "type": "insecureAcceptAnything" }] },
+    "oci-archive":        { "": [{ "type": "insecureAcceptAnything" }] },
+    "docker-archive":     { "": [{ "type": "insecureAcceptAnything" }] },
+    "docker-daemon":      { "": [{ "type": "insecureAcceptAnything" }] }
+  }
+}

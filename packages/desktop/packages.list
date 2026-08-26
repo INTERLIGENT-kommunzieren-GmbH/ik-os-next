@@ -1,0 +1,56 @@
+# GNOME desktop (SDD §11). Bluefin-like UX, independently maintained.
+
+gnome-shell
+
+# Rule 11: provisioning that needs a user account (group membership, Homebrew)
+# can only run AFTER gnome-initial-setup creates it — i.e. once the user is
+# already looking at their desktop. The boot splash cannot cover that phase, so
+# without a notification the machine silently downloads for several minutes and
+# looks broken. Used by ik-os-homebrew and ik-os-user-groups.
+libnotify-bin
+# The progress window ik-os-provisioning-monitor draws while Homebrew and the
+# company Brewfile install after first login. zenity's stdin protocol means no
+# GTK code of ours; measured against the image's dpkg database this and
+# zenity-common are the only two packages it adds.
+zenity
+gnome-session
+gdm3
+gnome-initial-setup             # SDD §36/§37 — creates the first user account on
+                                # first boot. The image ships no accounts and a
+                                # locked root (SDD §27), so without this GDM comes
+                                # up with nothing to log in as.
+gnome-control-center            # printer UI required by SDD §23
+gnome-settings-daemon
+gnome-terminal
+nautilus
+gnome-text-editor
+gnome-disk-utility
+# No gnome-system-monitor either: Mission Center replaces it as a Flatpak.
+# Its two privileged helpers do have to live here, though: a sandboxed app
+# cannot give a binary file capabilities, and cannot write them to a read-only
+# /usr afterwards (docs/adr/0013-mission-center-host-helpers.md).
+nethogs                         # per-process bandwidth; needs file capabilities
+lm-sensors                      # sensors-detect, which the app's setup probes for
+# No gnome-software. The graphical app store is Bazaar, installed as a Flatpak
+# (config/desktop/system-flatpaks.list) — a Flatpak-native store for a
+# Flatpak-first desktop (SDD §15, §54), and one less GUI stack in the immutable
+# image.
+xdg-desktop-portal
+xdg-desktop-portal-gnome
+xdg-user-dirs-gtk
+dconf-cli                       # required to compile desktop/gnome/dconf at build time
+libglib2.0-bin                  # gsettings, used to validate the dconf keys at build time
+plymouth
+plymouth-themes                 # branding watermark (branding/plymouth)
+fonts-cantarell
+pipewire
+pipewire-pulse
+wireplumber
+power-profiles-daemon
+gnome-shell-extension-manager   # lets developers manage their own extensions (SDD §53)
+
+# Anthropic's first-party package, from their own signed APT repository
+# (config/apt/claude-desktop.sources). Not in Debian and not on Flathub, so
+# SDD §54's Flatpak route does not apply — see docs/adr/0007-claude-desktop.md.
+claude-desktop
+

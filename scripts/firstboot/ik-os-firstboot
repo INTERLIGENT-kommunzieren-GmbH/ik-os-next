@@ -1,0 +1,313 @@
+#!/bin/bash
+# SDD §37 — first boot. MUST be idempotent: running it twice must not corrupt
+# anything.
+#
+# "First boot" is per image, not per machine. /var survives a bootc update, so
+# permanent stamps meant a new image that added a Flatpak to
+# system-flatpaks.list never installed it: the step was stamped done and skipped
+# forever. Steps therefore declare a scope (see STEPS below) and image-scoped
+# stamps record the image they were satisfied on.
+set -euo pipefail
+
+STATE=/var/lib/ik-os/firstboot
+POLICY=/usr/lib/ik-os/policy.env
+# shellcheck disable=SC1090
+[[ -r "$POLICY" ]] && . "$POLICY"
+
+mkdir -p "$STATE"
+log()  { printf '[ik-os-firstboot] %s\n' "$*"; }
+
+# --- image identity --------------------------------------------------------
+# Deliberately a runtime identifier, not a build-time one: IK_OS_VERSION
+# defaults to "dev" and IK_OS_BUILD_ID to "local" (95-finalize.sh), so every
+# locally built image would share a string and a test VM would never re-run
+# anything.
+IMAGE_ID=""
+image_id() {
+    if [[ -z "$IMAGE_ID" ]]; then
+        local id=""
+        # Authoritative, and the same identifier ik-os-enroll reports.
+        id=$(bootc status --json 2>/dev/null \
+             | jq -r '.status.booted.image.imageDigest // empty' 2>/dev/null) || id=""
+        # The ostree deployment checksum. No dependencies, changes per deployment.
+        [[ -n "$id" ]] || id=$(tr ' ' '\n' < /proc/cmdline 2>/dev/null \
+                               | sed -n 's|^ostree=||p' | head -1) || id=""
+        [[ -n "$id" ]] || id=$(awk -F'"' '/^VERSION_ID=/{print $2}' \
+                               /usr/lib/os-release 2>/dev/null) || id=""
+        IMAGE_ID="${id:-unknown}"
+    fi
+    printf '%s' "$IMAGE_ID"
+}
+
+# --- splash ----------------------------------------------------------------
+# This service is ordered Before=plymouth-quit.service, so the boot splash is
+# still on screen while it runs and the login screen has not appeared yet.
+#
+# We stay in plymouth's boot-up mode and write messages onto it. The earlier
+# design switched to [updates] mode and drove its progress bar, which was the
+# wrong trade: in two-step, SuppressMessages and UseProgressBar are set ONLY in
+# the progress-bar modes ([updates], [system-upgrade], [firmware-upgrade],
+# [system-reset]) and never in [boot-up]. So entering [updates] buys a bar at the
+# cost of the loader animation AND of every message -- which is exactly why
+# display-message rendered nothing there. See ADR 0012.
+#
+# SHOW_SPLASH gates every call. A boot that has nothing to do, or that is only
+# retrying a step which failed earlier on this same image, must not put setup
+# text in front of the user -- otherwise a machine with a permanently broken
+# network narrates its provisioning on every boot forever.
+SHOW_SPLASH=no
+SPLASH_BANNER="Setting up this machine — do not turn off your computer"
+SPLASH_DETAIL=""
+# The label of the step currently running, so the long steps can add their own
+# detail under it ("Installing applications (4 of 6): org.gnome.TextEditor").
+SPLASH_STEP=""
+
+splash_up() { [[ "$SHOW_SPLASH" == yes ]] && plymouth --ping >/dev/null 2>&1; }
+
+# Displayed once and left up for the whole run, so it is never part of the churn.
+#
+# Plymouth keys messages by their exact text -- both display-message and
+# hide-message take --text=<string> -- so it holds a list and several can be up
+# at once. Whether two-step RENDERS more than one is not something we can
+# guarantee; if it shows only the newest, the detail line below wins, because it
+# is always displayed after this one. That degrades to "informative but without
+# the warning", never to a blank screen.
+splash_banner() {
+    splash_up || return 0
+    plymouth display-message --text="$SPLASH_BANNER" >/dev/null 2>&1 || true
+}
+# Replacing a message means hiding the old text and displaying the new one:
+# there is no "update this message" verb.
+splash_detail() {
+    splash_up || return 0
+    if [[ -n "$SPLASH_DETAIL" ]]; then
+        plymouth hide-message --text="$SPLASH_DETAIL" >/dev/null 2>&1 || true
+    fi
+    SPLASH_DETAIL="${1:-}"
+    if [[ -n "$SPLASH_DETAIL" ]]; then
+        plymouth display-message --text="$SPLASH_DETAIL" >/dev/null 2>&1 || true
+    fi
+}
+# Take both lines down: the login screen must not be preceded by stale text.
+# No change-mode to undo -- we never left boot-up.
+splash_end() {
+    splash_up || return 0
+    splash_detail ""
+    plymouth hide-message --text="$SPLASH_BANNER" >/dev/null 2>&1 || true
+}
+
+# --- steps -----------------------------------------------------------------
+#   once  — machine-local state a new image does not invalidate. Done is done.
+#   image — the step's inputs ship in the image, or the step reports to something
+#           that wants to know about the new image. The stamp records the image
+#           id it was satisfied on and a different id re-runs it.
+# scope:name:command:label -- the label is what the boot splash says.
+STEPS=(
+    "once:snakeoil:setup_snakeoil:Generating security certificates"
+    "image:enrollment:/usr/libexec/ik-os/ik-os-enroll:Enrolling this device"
+    "image:vpn:setup_vpn:Configuring the company VPN"
+    "image:flatpak:setup_flatpak:Installing applications"
+    "image:verify-docker:verify_docker:Checking Docker"
+    "image:verify-cups:verify_cups:Checking printing"
+)
+# Group membership (ik-os-user-groups.service) and Homebrew
+# (ik-os-homebrew.service) are owned by units triggered by an account appearing,
+# not by boot ordering — neither can run before gnome-initial-setup has created
+# a user, and this service runs long before that.
+
+# Stamps are self-describing so nothing else has to re-parse STEPS to interpret
+# them: "once" never expires, an image id expires when the booted image changes.
+# `ik-os diagnostics` reads this back.
+stamp_value() {
+    if [[ "$1" == "once" ]]; then
+        printf 'once\n'
+    else
+        printf '%s\n' "$(image_id)"
+    fi
+}
+
+step_satisfied() {
+    local name="$1" scope="$2"
+    local stamp="${STATE}/${name}.done"
+    local recorded
+    [[ -e "$stamp" ]] || return 1
+    [[ "$scope" == "once" ]] && return 0
+    recorded=$(cat "$stamp" 2>/dev/null) || recorded=""
+    # A pre-ADR-0010 stamp is empty: unknown provenance, so re-run it once.
+    [[ -n "$recorded" && "$recorded" == "$(image_id)" ]]
+}
+
+run_step() {
+    local scope="$1" name="$2" cmd="$3"
+    log "${name}: running"
+    if "$cmd"; then
+        stamp_value "$scope" > "${STATE}/${name}.done"
+        rm -f "${STATE}/${name}.failed"
+        log "${name}: ok"
+    else
+        # Never block the boot on a provisioning step — but never lose the
+        # failure either. A silently half-provisioned desktop is worse than a
+        # visible error: `ik-os diagnostics` reports anything left here.
+        date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/${name}.failed"
+        log "${name}: FAILED (will retry on next boot)"
+        return 0
+    fi
+}
+
+setup_flatpak() {
+    # SDD §15 — Flathub as the default source, plus the approved app list.
+    flatpak remote-add --if-not-exists --system \
+        flathub /usr/lib/ik-os/flatpak/flathub.flatpakrepo
+    local list=/usr/share/ik-os/system-flatpaks.list
+    [[ -r "$list" ]] || return 0
+
+    # Appstream metadata is what an app store searches. Installing apps does not
+    # fetch it, so without this Bazaar and `flatpak search` show an empty
+    # catalogue on a machine whose Flatpaks all installed correctly — which
+    # looks exactly like a broken network. ~100MB, a few seconds.
+    splash_detail "${SPLASH_STEP:-Installing applications}: downloading the catalogue"
+    flatpak update --appstream --system >/dev/null 2>&1 \
+        || log "appstream metadata not fetched — the app store will look empty"
+
+    local -a want=()
+    mapfile -t want < <(sed -e 's/#.*//' -e 's/[[:space:]]*$//' "$list" | grep -v '^$')
+    (( ${#want[@]} )) || return 0
+
+    # First boot races the network: network-online.target is reached as soon as
+    # an address is configured, which is well before Flathub is reliably
+    # reachable on a slow link. One attempt per boot would mean an empty app
+    # store until someone noticed.
+    local attempt ref
+    for attempt in 1 2 3; do
+        for ref in "${want[@]}"; do
+            flatpak info --system "$ref" >/dev/null 2>&1 && continue
+            log "installing ${ref} (attempt ${attempt})"
+            # This is the step that takes minutes. Without a line per app the
+            # splash sits on "Installing applications" long enough to read as a
+            # hang -- which is the whole reason for naming what is happening.
+            splash_detail "${SPLASH_STEP:-Installing applications}: ${ref}"
+            flatpak install --system --noninteractive --or-update flathub "$ref" \
+                || log "${ref}: install failed"
+        done
+        flatpak_missing "${want[@]}" || break
+        if (( attempt < 3 )); then
+            log "retrying in 30s"
+            splash_detail "${SPLASH_STEP:-Installing applications}: waiting for the network"
+            sleep 30
+        fi
+    done
+
+    # The bug this replaces: every failure above was swallowed by "|| log", the
+    # loop returned 0, and the step stamped itself done — so a first boot with a
+    # flaky network left the machine with no Flatpaks, permanently, because the
+    # step was then skipped on every later boot. Report the truth instead.
+    local -a missing=()
+    for ref in "${want[@]}"; do
+        flatpak info --system "$ref" >/dev/null 2>&1 || missing+=( "$ref" )
+    done
+    if (( ${#missing[@]} )); then
+        log "NOT installed: ${missing[*]}"
+        log "the step stays unfinished and retries on the next boot"
+        return 1
+    fi
+    # An empty catalogue is a user-visible failure even when every app installed,
+    # so it counts as unfinished too.
+    if ! compgen -G '/var/lib/flatpak/appstream/flathub/*/*' >/dev/null; then
+        log "no appstream metadata: the app store would show nothing"
+        log "the step stays unfinished and retries on the next boot"
+        return 1
+    fi
+    log "all ${#want[@]} system Flatpaks installed, appstream metadata present"
+}
+
+flatpak_missing() {
+    local ref
+    for ref in "$@"; do
+        flatpak info --system "$ref" >/dev/null 2>&1 || return 0
+    done
+    return 1
+}
+
+setup_snakeoil() {
+    # SDD §27 — the image ships no key material, so the self-signed certificate
+    # some services expect is generated here, once, per machine.
+    [[ -e /etc/ssl/private/ssl-cert-snakeoil.key ]] && return 0
+    command -v make-ssl-cert >/dev/null || return 0
+    make-ssl-cert generate-default-snakeoil --force-overwrite
+}
+
+setup_vpn()      { /usr/libexec/ik-os/ik-os-provision-vpn; }
+verify_docker()  { docker version >/dev/null && docker compose version >/dev/null; }
+verify_cups()    { systemctl is-active --quiet cups.socket || systemctl is-active --quiet cups.service; }
+
+# --- decide what to do before touching anything the user can see -----------
+# Resolve the image id exactly once. image_id caches in IMAGE_ID, but every
+# later caller reads it through $( ), where that cache lives in a subshell and
+# is thrown away -- so without this, `bootc status` runs once per step and two
+# steps in the same run could disagree if it were briefly unavailable.
+IMAGE_ID=$(image_id)
+CURRENT_IMAGE="$IMAGE_ID"
+LAST_IMAGE=""
+[[ -r "${STATE}/.last-run-image" ]] && LAST_IMAGE=$(cat "${STATE}/.last-run-image")
+
+PENDING=()
+for entry in "${STEPS[@]}"; do
+    IFS=: read -r e_scope e_name _e_cmd _e_label <<<"$entry"
+    step_satisfied "$e_name" "$e_scope" || PENDING+=( "$entry" )
+done
+
+if (( ${#PENDING[@]} == 0 )); then
+    # The whole point: no work means no setup screen, no held login screen, and
+    # no diagnostics rewrite. This is every boot after the first on an image.
+    log "nothing to do for image ${CURRENT_IMAGE}"
+    printf '%s\n' "$CURRENT_IMAGE" > "${STATE}/.last-run-image"
+    exit 0
+fi
+
+# The splash is gated on the image being new, not on work existing. Work can
+# exist on any boot (a step that failed earlier retries), but the user should
+# only be made to watch it on the first boot of a machine and the first boot
+# after an update.
+if [[ "$CURRENT_IMAGE" == "$LAST_IMAGE" ]]; then
+    SHOW_SPLASH=no
+    log "already provisioned once on image ${CURRENT_IMAGE}; retrying quietly"
+else
+    SHOW_SPLASH=yes
+    log "first boot on image ${CURRENT_IMAGE}"
+fi
+
+STEP_TOTAL=${#PENDING[@]}
+STEP_N=0
+log "${STEP_TOTAL} step(s) to run"
+splash_banner
+
+for entry in "${PENDING[@]}"; do
+    IFS=: read -r e_scope e_name e_cmd e_label <<<"$entry"
+    STEP_N=$(( STEP_N + 1 ))
+    SPLASH_STEP="${e_label} (${STEP_N} of ${STEP_TOTAL})"
+    splash_detail "$SPLASH_STEP"
+    run_step "$e_scope" "$e_name" "$e_cmd"
+done
+
+/usr/bin/ik-os diagnostics > /var/log/ik-os-firstboot-diagnostics.txt 2>&1 || true
+
+shopt -s nullglob
+FAILED=( "${STATE}"/*.failed )
+shopt -u nullglob
+if (( ${#FAILED[@]} )); then
+    log "provisioning completed WITH FAILURES:"
+    for f in "${FAILED[@]}"; do
+        log "  - $(basename "$f" .failed)"
+    done
+    log "run 'ik-os diagnostics' for detail; these retry on the next boot"
+else
+    log "ik-os provisioning complete"
+fi
+
+# Written even when steps failed: it records that this image has had its one
+# splashed run, so the retries above happen quietly from now on.
+printf '%s\n' "$CURRENT_IMAGE" > "${STATE}/.last-run-image"
+
+# Hand the splash back either way: a machine that finished with failures must
+# still reach the login screen, not sit on a stalled progress bar.
+splash_end

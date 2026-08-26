@@ -1,0 +1,11 @@
+# Kernel arguments owned by the image (/usr/lib/bootc/kargs.d).
+# Schema is strict: only `kargs` and `match-architectures` are accepted.
+#
+# `splash` is what actually starts Plymouth; without it the theme, the
+# watermark and the whole boot splash are simply never shown.
+kargs = [
+    "quiet",
+    "splash",
+    # Framework panels are HiDPI; keep early boot legible.
+    "fbcon=nodefer",
+]

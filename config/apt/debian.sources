@@ -1,0 +1,19 @@
+# SDD §3 — track the CODENAME `forky`, never a suite alias.
+#
+# forky is Debian testing today and becomes Debian stable on release. Naming
+# the codename means that transition needs no change here: the same URLs
+# describe a testing base before release and a stable base after it.
+#
+# Do NOT change these to `testing` (would jump to the next release on release
+# day) or to `stable` (would silently switch the base back to trixie today).
+Types: deb
+URIs: http://deb.debian.org/debian
+Suites: forky forky-updates
+Components: main contrib non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: http://security.debian.org/debian-security
+Suites: forky-security
+Components: main contrib non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg

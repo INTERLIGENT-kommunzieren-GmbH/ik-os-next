@@ -1,0 +1,14 @@
+# Developer baseline (SDD §55). CLI tooling beyond this belongs in Homebrew,
+# project dependencies belong in OCI containers (SDD §54).
+
+git
+git-lfs
+openssh-client
+build-essential         # required by Homebrew on Linux
+procps                  # required by Homebrew on Linux
+file                    # required by Homebrew on Linux
+mc                      # carried over from the Bluefin-based ik-os image
+vim
+rsync
+unzip
+flatpak                 # SDD §15

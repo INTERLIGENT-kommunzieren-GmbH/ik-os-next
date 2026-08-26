@@ -1,0 +1,12 @@
+.idea/
+output/
+_build*/
+cosign.key
+*.qcow2
+*.raw
+*.iso
+manifest*.json
+previous.manifest.json
+changelog.md
+output.env
+iso/image.env

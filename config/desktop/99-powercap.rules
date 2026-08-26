@@ -1,0 +1,18 @@
+# CPU power draw for Mission Center (io.missioncenter.MissionCenter).
+#
+# The kernel exposes package energy counters under /sys/class/powercap as
+# root-only, because reading them at high frequency is a known side channel
+# (PLATYPUS, CVE-2020-8694 — Debian's fix was exactly this permission change).
+# A desktop monitor cannot read them, so Mission Center offers to run a setup
+# script that writes this rule to /etc/udev/rules.d. On ik-os that script cannot
+# work — see docs/adr/0013-mission-center-host-helpers.md — so the rule ships
+# with the image instead.
+#
+# Copied VERBATIM from the app's own setup script (missioncenter-magpie), so
+# that a user who runs it anyway produces an identical /etc copy rather than a
+# second, conflicting rule. Keep it byte-identical when updating.
+#
+# "intel-rapl" is not Intel-only: current AMD parts, including the Ryzen 7040
+# and Ryzen AI in the Framework 13, expose RAPL through the same driver and the
+# same sysfs names.
+SUBSYSTEM=="powercap", KERNEL=="intel-rapl*", RUN+="/usr/bin/chmod a+r /sys/%p/energy_uj"

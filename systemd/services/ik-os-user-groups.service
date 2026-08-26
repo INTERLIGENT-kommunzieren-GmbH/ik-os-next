@@ -1,0 +1,14 @@
+[Unit]
+Description=Grant group membership to human accounts per company policy
+Documentation=file:/usr/share/doc/ik-os/docker-security.md
+After=systemd-sysusers.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/ik-os/ik-os-user-groups
+StandardOutput=journal
+
+[Install]
+# Runs at boot for accounts that already exist, and is additionally triggered by
+# ik-os-user-groups.path the moment gnome-initial-setup creates the first one.
+WantedBy=multi-user.target

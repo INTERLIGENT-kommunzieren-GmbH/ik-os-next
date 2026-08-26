@@ -1,0 +1,82 @@
+# ik-os base OS packages (SDD §56).
+# Rule 11: every package needs a documented reason. Keep this file justified.
+
+## --- init, core userspace -------------------------------------------------
+systemd                 # init (SDD §59: no custom init system)
+systemd-sysv
+systemd-resolved        # DNS; required for the VPN split-DNS profile (config/company)
+# Rule 11: 65-printing.sh puts "resolve" and "myhostname" in the nsswitch hosts
+# line. glibc silently ignores an NSS module whose library is absent, so without
+# these two the line is a lie: systemd-resolved is bypassed, and the machine
+# cannot resolve its own hostname — every sudo prints
+# "unable to resolve host ik-<id>: System error" and pauses first.
+libnss-resolve          # the "resolve" NSS module (systemd-resolved)
+libnss-myhostname       # the "myhostname" NSS module; resolves the local hostname
+systemd-timesyncd
+udev
+dbus
+dbus-user-session
+polkitd                 # privilege escalation for GNOME Settings (printers, SDD §23)
+sudo
+libpam-systemd
+util-linux
+uuid-runtime            # uuidgen, used to generate the NetworkManager VPN profile UUID
+pciutils                # lspci, used by `ik-os hardware` (SDD §48)
+usbutils                # lsusb, used by `ik-os hardware` (SDD §48)
+coreutils
+procps
+bash
+netbase
+locales
+tzdata
+ca-certificates         # trust store; CA-IK is added on top (config/company)
+less
+gnupg
+curl
+wget
+zstd
+xz-utils
+jq                      # used by ik-os diagnostics / migration tooling
+
+## --- immutable OS plumbing (SDD §4) ---------------------------------------
+ostree                  # 2026.2 in Debian 14 — new enough for bootc, so no
+ostree-boot             # upstream build is needed any more (ADR 0001).
+composefs               # mkcomposefs et al; the composefs backend needs them.
+dracut                  # initramfs with the ostree module
+dracut-network
+kmod
+skopeo                  # image inspection for `ik-os status` / migration
+# NOTE: bootc alone is not packaged by Debian and is built from a pinned
+# upstream tag in the Containerfile. See docs/adr/0001-bootc-from-source.md.
+
+## --- boot (SDD §5) --------------------------------------------------------
+systemd-boot
+systemd-boot-efi
+efibootmgr
+shim-signed             # Secure Boot chain entry; see docs/adr/0002-secure-boot.md
+mokutil
+sbsigntool              # sign systemd-boot with the company MOK at build time
+
+## --- filesystems ----------------------------------------------------------
+e2fsprogs
+btrfs-progs             # default root filesystem for ik-os disk images
+dosfstools              # ESP
+fdisk                   # sfdisk. Debian splits it out of util-linux, and
+                        # `bootc install to-disk` shells out to it to partition
+                        # the target — without it installation fails at the
+                        # very first step. Filesystem growth needs no extra
+                        # package: systemd-growfs handles it.
+cryptsetup
+
+## --- networking -----------------------------------------------------------
+network-manager
+network-manager-openvpn         # company VPN (config/company, SDD §39)
+wireless-regdb
+iproute2
+iputils-ping
+openssh-client
+
+## --- security (SDD §50) ---------------------------------------------------
+apparmor
+apparmor-profiles
+firewalld               # supported firewall configuration, managed via config/security

@@ -1,0 +1,26 @@
+# SDD §20-§22. Driverless first; Level-2 Debian drivers only where a supported
+# printer needs them.
+
+## Level 1 — driverless (SDD §21)
+cups
+cups-client
+cups-ipp-utils
+cups-filters
+cups-browsed
+
+# Rule 11: GNOME Settings -> Printers administers CUPS through cups-pk-helper's
+# polkit mechanism; config/cups/49-ik-os-printers.rules grants its actions to
+# the local session. It is only a Recommends of gnome-control-center and the
+# build installs with --no-install-recommends, so without this line the panel
+# reports "some settings cannot be unlocked" and Add Printer is greyed out —
+# which breaks SDD §23 (adding a printer must not require root).
+cups-pk-helper
+avahi-daemon
+avahi-utils
+libnss-mdns             # required for .local name resolution of IPP printers
+ipp-usb                 # IPP-over-USB
+
+## Level 2 — Debian-provided drivers (SDD §22).
+## Only add entries here for printer models the company actually operates,
+## and record the model in docs/printing.md.
+printer-driver-gutenprint

@@ -1,0 +1,7 @@
+# SDD §14 — three tiers: company defaults, *managed settings* (this file), and
+# user settings. Only genuinely policy-relevant keys belong here; everything
+# else stays a default the developer can override (SDD §53).
+#
+# Rules 8 and 9 are acceptance criteria, so they are enforced, not suggested.
+/org/gnome/shell/extensions/arcmenu/menu-button-appearance
+/org/gnome/shell/extensions/arcmenu/runner-hotkey

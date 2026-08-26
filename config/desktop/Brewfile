@@ -1,0 +1,184 @@
+# SDD §16 — the company Brewfile. CLI developer tooling belongs here, not in
+# the OS image (SDD §54). Developers may add personal packages on top; this
+# file only defines the company baseline.
+#
+# Every entry here is downloaded and installed on every laptop on first boot
+# (scripts/firstboot/ik-os-homebrew), so keep it to things the whole company
+# wants. `build/validation/check-brewfile.sh` verifies each line resolves.
+
+# --- Third-party taps ------------------------------------------------------
+# Declared up front rather than next to each entry: ik-os-homebrew taps and
+# trusts every `tap` line BEFORE running `brew bundle`, because within a single
+# bundle run a cask is evaluated before its tap is cloned. See that script.
+#
+# Note the names: Homebrew strips the "homebrew-" prefix from the repository, so
+# github.com/ublue-os/homebrew-tap is the tap "ublue-os/tap".
+
+# The tap Bluefin itself uses (ADR 0009). Its casks pin an upstream sha256 and
+# download from the vendor's own origin, so trusting it is trusting the vendors
+# plus ublue-os's packaging, not an opaque binary channel.
+tap "ublue-os/tap"
+
+# Our own tap. Company-internal tooling only.
+tap "interligent-kommunzieren-gmbh/tap"
+
+# shivammathur's PHP taps — the same source the PHP ecosystem uses for versioned
+# PHP builds and extensions in CI (setup-php).
+#
+# BOTH are required, and the second one is not obvious: the extensions in
+# shivammathur/extensions declare `depends_on "shivammathur/php/php@8.5"`, so
+# installing any of them pulls a formula out of shivammathur/php. Homebrew
+# refuses to load a formula from a tap that is neither tapped nor trusted, and
+# `brew bundle install` then reports success while installing none of them:
+#
+#   Error: Refusing to load formula shivammathur/php/php from untrusted tap
+#          shivammathur/php.
+#
+# ik-os-homebrew trusts and taps every `tap` line here before running bundle,
+# which is what makes declaring it sufficient. Verified on a booted VM.
+tap "shivammathur/extensions"
+tap "shivammathur/php"
+
+# Single-formula taps for two tools with no homebrew/core equivalent.
+tap "systemmanic/aws-session-manager-plugin"
+tap "valkyrie00/bbrew"
+
+# --- Why every cask carries `greedy: true` ---------------------------------
+# `brew bundle check` treats an outdated cask as unsatisfied, but `brew bundle
+# install` only UPGRADES a cask when its entry sets `greedy` (see
+# Homebrew/bundle/cask.rb: `upgrading?` returns false without it, while
+# `cask_installed_and_up_to_date?` ignores the flag entirely).
+#
+# Without it the two disagree the moment upstream bumps a version, and
+# ik-os-homebrew uses `bundle check` as its success gate: it would install
+# nothing, still fail the check, and report "Some developer tools did not
+# install" on every laptop until someone upgraded by hand. Formulae do not need
+# this — `bundle install` upgrades those by default.
+#
+# None of these casks set `auto_updates`, so greedy changes nothing about WHICH
+# versions are considered current; it only permits the upgrade.
+
+# --- Version control and forges --------------------------------------------
+brew "git"
+brew "gh"
+brew "glab"                     # GitLab counterpart to gh
+
+# --- Build, test and lint --------------------------------------------------
+brew "just"
+brew "shellcheck"
+brew "bats-core"                # the framework this repo's own tests/ use
+
+# --- Text, data and documents ----------------------------------------------
+brew "jq"
+brew "yq"                       # the same idea for YAML/TOML/XML
+brew "ripgrep"
+brew "fd"
+brew "ugrep"                    # grep-compatible, with an interactive query UI
+brew "pandoc"                   # markdown <-> docx/pdf for company documents
+
+# --- Terminal basics -------------------------------------------------------
+# Deliberately additive: none of these replace a coreutils binary the system
+# depends on. brew's `coreutils`/`uutils-coreutils` would shadow Debian's on
+# PATH and are intentionally NOT here.
+brew "bat"                      # cat, with highlighting and paging
+brew "eza"                      # ls, with git status and icons
+brew "dust"                     # du, as a visual tree
+brew "dysk"                     # df, readable
+brew "ncdu"                     # interactive disk usage
+brew "trash-cli"                # `trash`, a recoverable rm
+brew "tealdeer"                 # `tldr` cheatsheets
+
+# --- Shell experience ------------------------------------------------------
+# The glyphs in the starship prompt, eza's icons and btop's meters need a
+# patched font; the Nerd Fonts at the bottom of this file are what supply them.
+brew "starship"
+brew "atuin"                    # searchable, syncable shell history
+brew "bash-preexec"             # the hook library atuin needs on bash
+brew "carapace"                 # completions for hundreds of CLIs
+brew "zoxide"                   # frecency-ranked cd
+
+# --- Monitoring and diagnostics --------------------------------------------
+brew "btop"
+# No nethogs here. It moved to packages/desktop/packages.list: Mission Center
+# needs one with file capabilities, and it resolves the binary on a PATH that
+# contains no Homebrew prefix. Two copies would mean the one on the user's PATH
+# is the one that cannot capture (ADR 0013).
+brew "nmap"
+brew "socat"
+brew "strace"
+
+# --- Environment and dotfiles ----------------------------------------------
+brew "chezmoi"
+brew "direnv"
+
+# --- JavaScript ------------------------------------------------------------
+# nvm is the day-to-day tool; node@24 pins the version the company targets so a
+# usable Node exists before anyone runs `nvm install`. node@24 is a versioned
+# formula and therefore KEG-ONLY: Homebrew does not put it on PATH. Use it via
+# nvm, or link it deliberately — see docs/development.md.
+brew "nvm"
+brew "node@24"
+
+# --- PHP -------------------------------------------------------------------
+# The ik PHP/Mezzio stack runs in Docker (SDD §17), so this is for the tooling
+# developers run on the host: composer for dependency work, the extensions for
+# the times a script has to run outside a container. All of these pull
+# homebrew/core's `php` as a dependency.
+brew "composer"
+brew "shivammathur/extensions/apcu@8.5"
+brew "shivammathur/extensions/decimal@8.5"
+brew "shivammathur/extensions/imap@8.5"      # dropped from PHP core in 8.4
+brew "shivammathur/extensions/phpredis@8.5"
+
+# --- Cloud and company tooling ---------------------------------------------
+brew "interligent-kommunzieren-gmbh/tap/docker-control"
+brew "systemmanic/aws-session-manager-plugin/aws-session-manager-plugin"
+brew "valkyrie00/bbrew/bbrew"   # TUI for Homebrew itself
+
+# --- Miscellaneous ---------------------------------------------------------
+brew "nss"                      # certutil et al; also pulled in as a dependency
+
+# --- Framework laptop ------------------------------------------------------
+# SDD §54 routes hardware integration to the OS image, but framework_tool is a
+# vendor binary with no Debian package, and Rule 5 keeps vendor binaries out of
+# /usr. Userspace is the correct place for it.
+#
+# A Brewfile is Ruby, so gate it on the hardware actually being a Framework —
+# the same condition Bluefin uses. Note the cask token is "framework-tool" with
+# a hyphen; Bluefin's own hook asks for "framework_tool", which does not exist
+# in the tap, so their Framework install is currently a no-op.
+framework = ["/sys/class/dmi/id/sys_vendor",
+             "/sys/class/dmi/id/chassis_vendor"].any? do |f|
+  File.readable?(f) && File.read(f).strip == "Framework"
+rescue StandardError
+  false
+end
+
+cask "framework-tool", greedy: true if framework
+brew "framework-tool-tui" if framework          # TUI front-end for the above
+cask "ublue-os/tap/framework-wallpapers", greedy: true if framework
+
+# --- GUI applications ------------------------------------------------------
+# JetBrains Toolbox. SDD §54 routes GUI applications to Flatpak; JetBrains
+# publishes no official Flatpak, and IDEs run poorly from one (sandboxed access
+# to toolchains, containers and the Docker socket). Bluefin makes the same call.
+cask "jetbrains-toolbox-linux", greedy: true
+
+# --- Fonts -----------------------------------------------------------------
+# Nerd Fonts: monospace faces patched with the icon glyphs starship, eza and
+# btop draw with. Debian's fonts-* packages ship the unpatched upstream faces,
+# which render those glyphs as boxes, so this is not a duplicate of the image's
+# font packages.
+#
+# These come from homebrew/cask. That tap was macOS-only for years, but current
+# Homebrew installs font casks on Linux through the internal formulae.brew.sh
+# API and drops the .ttf files where fontconfig finds them — verified on the
+# reference laptop. They therefore need no `tap` line above.
+cask "font-fira-code-nerd-font", greedy: true
+cask "font-caskaydia-mono-nerd-font", greedy: true
+cask "font-sauce-code-pro-nerd-font", greedy: true
+cask "font-0xproto-nerd-font", greedy: true
+cask "font-blex-mono-nerd-font", greedy: true
+cask "font-droid-sans-mono-nerd-font", greedy: true
+cask "font-go-mono-nerd-font", greedy: true
+cask "font-ubuntu-nerd-font", greedy: true

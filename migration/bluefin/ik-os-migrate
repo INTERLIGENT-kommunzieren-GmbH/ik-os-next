@@ -1,0 +1,305 @@
+#!/bin/bash
+# ik-os-migrate — Bluefin (Fedora) -> ik-os (Debian) migration.
+# SDD §28-§35, §58.
+#
+# This is an explicit distribution migration, NOT `bootc switch`: the two images
+# do not share a package manager, a system layout, or a kernel lineage.
+set -euo pipefail
+
+STATE=/var/lib/ik-os/migrate
+REPORT="${STATE}/preflight-report.txt"
+BACKUP_DEFAULT=/var/lib/ik-os/migrate/backup
+TARGET_IMAGE="${IK_OS_TARGET_IMAGE:-ghcr.io/interligent-kommunzieren-gmbh/ik-os:stable}"
+
+bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
+ok()    { printf '  \033[32m[ ok ]\033[0m %s\n' "$*"; }
+warn()  { printf '  \033[33m[warn]\033[0m %s\n' "$*"; }
+fail()  { printf '  \033[31m[FAIL]\033[0m %s\n' "$*"; FAILURES=$((FAILURES+1)); }
+die()   { printf '\033[1;31m%s\033[0m\n' "$*" >&2; exit 1; }
+need_root() { [[ $EUID -eq 0 ]] || die "this command must run as root"; }
+
+banner() {
+    # SDD §58 — always state both sides before anything destructive.
+    bold "ik-os-migrate"
+    printf '  Current OS: %s\n' "$(awk -F'"' '/^PRETTY_NAME=/{print $2}' /etc/os-release)"
+    printf '  Target OS:  ik-os (%s)\n\n' "$TARGET_IMAGE"
+}
+
+FAILURES=0
+
+# ---------------------------------------------------------------- check ----
+cmd_check() {
+    mkdir -p "$STATE"
+    # SDD §29 — the tool must produce a human-readable report.
+    exec > >(tee "$REPORT") 2>&1
+    banner
+    bold "Preflight (SDD §29)"
+
+    if [[ -d /sys/firmware/efi ]]; then
+        ok "UEFI firmware"
+    else
+        fail "not booted in UEFI mode — ik-os does not support legacy BIOS (SDD §5)"
+    fi
+
+    local sb; sb=$(mokutil --sb-state 2>/dev/null | head -1 || echo "unknown")
+    case "$sb" in
+        *enabled*)  ok  "Secure Boot: enabled — the ik-os MOK must be enrolled during install" ;;
+        *disabled*) warn "Secure Boot: disabled — ik-os will install, but SDD §50 expects it on" ;;
+        *)          warn "Secure Boot: state unknown" ;;
+    esac
+
+    local vendor product
+    vendor=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || true)
+    product=$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)
+    if [[ "$vendor" == *Framework* ]]; then
+        ok "supported hardware: ${vendor} ${product}"
+    else
+        fail "unsupported hardware: ${vendor} ${product} — ik-os targets Framework laptops (SDD §2)"
+    fi
+
+    if [[ -f /run/ostree-booted ]] && grep -qi 'fedora\|bluefin' /etc/os-release; then
+        ok "Bluefin detected (Fedora/ostree)"
+    else
+        warn "this does not look like a Bluefin system; migration is only tested from Bluefin"
+    fi
+
+    # /home must be a separate, preserved subvolume/partition (SDD §30).
+    local home_src; home_src=$(findmnt -no SOURCE --target /var/home 2>/dev/null || findmnt -no SOURCE --target /home)
+    local root_src; root_src=$(findmnt -no SOURCE --target / 2>/dev/null)
+    if [[ -n "$home_src" ]]; then
+        ok "/home backing device: ${home_src}"
+        [[ "$home_src" == "$root_src" ]] && warn "/home shares a device with / — install must preserve it in place, not reformat"
+    else
+        fail "cannot determine the backing device for /home"
+    fi
+
+    local avail; avail=$(df -BG --output=avail /var/home 2>/dev/null | tail -1 | tr -dc '0-9')
+    if (( ${avail:-0} >= 25 )); then ok "free space: ${avail}G"
+    else fail "only ${avail:-0}G free; at least 25G is required for the image plus backup"; fi
+
+    bold "\nData inventory (SDD §29)"
+    printf '  %-24s %s\n' "user accounts"  "$(awk -F: '$3>=1000 && $3<65000' /etc/passwd | wc -l)"
+    awk -F: '$3>=1000 && $3<65000 {printf "    %-16s uid=%s gid=%s home=%s\n", $1,$3,$4,$6}' /etc/passwd
+    printf '  %-24s %s\n' "flatpak apps"   "$(flatpak list --app --columns=application 2>/dev/null | wc -l)"
+    printf '  %-24s %s\n' "docker images"  "$(docker images -q 2>/dev/null | wc -l)"
+    printf '  %-24s %s\n' "docker volumes" "$(docker volume ls -q 2>/dev/null | wc -l)"
+    printf '  %-24s %s\n' "compose projects" "$(docker compose ls -q 2>/dev/null | wc -l)"
+    printf '  %-24s %s\n' "ssh keys"       "$(find /var/home/*/.ssh -name 'id_*' ! -name '*.pub' 2>/dev/null | wc -l)"
+    printf '  %-24s %s\n' "brew packages"  "$(sudo -u "$(awk -F: '$3>=1000{print $1;exit}' /etc/passwd)" brew list 2>/dev/null | wc -l)"
+    printf '  %-24s %s\n' "NM connections" "$(nmcli -t -f NAME connection show 2>/dev/null | wc -l)"
+
+    bold "\nRecovery"
+    if [[ -n "$(bootc status --json 2>/dev/null | jq -r '.status.rollbackQueued // empty')" ]] || rpm-ostree status >/dev/null 2>&1; then
+        ok "the current OS can be re-deployed from its own registry if migration is abandoned"
+    else
+        warn "no rollback deployment detected — take a full backup before proceeding"
+    fi
+
+    echo
+    if (( FAILURES > 0 )); then
+        bold "Result: NOT READY — ${FAILURES} blocking issue(s)"
+        echo "Migration would abort. Resolve the items marked FAIL and re-run."
+    else
+        bold "Result: READY"
+        echo "Next: ik-os-migrate backup"
+    fi
+    return 0
+}
+
+# --------------------------------------------------------------- backup ----
+cmd_backup() {
+    need_root
+    local dest="${1:-$BACKUP_DEFAULT}"
+    banner
+    bold "Recording state into ${dest} (SDD §30-§33)"
+    mkdir -p "$dest"
+
+    # SDD §31 — the Flatpak *list*, not the Flatpak internals.
+    flatpak list --app --columns=application > "${dest}/flatpak-apps.list" 2>/dev/null || true
+    ok "flatpak application list"
+
+    # SDD §32 — record Docker state; never copy Docker's internal state.
+    docker images  --format '{{.Repository}}:{{.Tag}}' > "${dest}/docker-images.list"  2>/dev/null || true
+    docker ps -a   --format '{{.Names}}\t{{.Image}}'   > "${dest}/docker-containers.list" 2>/dev/null || true
+    docker volume ls -q                                 > "${dest}/docker-volumes.list" 2>/dev/null || true
+    docker network ls --format '{{.Name}}\t{{.Driver}}' > "${dest}/docker-networks.list" 2>/dev/null || true
+    docker compose ls --format json                     > "${dest}/docker-compose.json" 2>/dev/null || true
+    ok "docker inventory (images/containers/volumes/networks/compose)"
+
+    # Named volumes MAY be migrated (SDD §25) — exported, not copied raw.
+    mkdir -p "${dest}/docker-volumes"
+    while read -r v; do
+        [[ -z "$v" ]] && continue
+        if docker run --rm -v "${v}:/from:ro" -v "${dest}/docker-volumes:/to" \
+               docker.io/library/debian:forky-slim \
+               tar -C /from -cf "/to/${v}.tar" . 2>/dev/null; then
+            ok "exported volume ${v}"
+        else
+            warn "could not export volume ${v}"
+        fi
+    done < "${dest}/docker-volumes.list"
+
+    # SDD §33 — Homebrew inventory, never the Fedora-era install tree.
+    local u; u=$(awk -F: '$3>=1000 && $3<65000 {print $1; exit}' /etc/passwd)
+    if sudo -u "$u" brew bundle dump --force --file="${dest}/Brewfile" 2>/dev/null; then
+        ok "Brewfile"
+    else
+        warn "Homebrew not present or brew bundle unavailable"
+    fi
+
+    # SDD §30 — user identity so UID/GID survive.
+    awk -F: '$3>=1000 && $3<65000' /etc/passwd > "${dest}/passwd.users"
+    awk -F: '$3>=1000 && $3<65000' /etc/group  > "${dest}/group.users"
+    ok "user accounts and UID/GID"
+
+    nmcli -t -f NAME,TYPE connection show > "${dest}/nm-connections.list" 2>/dev/null || true
+    ok "network connection list"
+
+    cat > "${dest}/MANIFEST" <<EOF
+source_os=$(awk -F'"' '/^PRETTY_NAME=/{print $2}' /etc/os-release)
+target_image=${TARGET_IMAGE}
+recorded_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF
+    echo
+    bold "Backup complete."
+    echo "  /home is NOT copied: it is preserved in place by the install step (SDD §30)."
+    echo "  Next: ik-os-migrate install --dry-run"
+}
+
+# -------------------------------------------------------------- install ----
+cmd_install() {
+    need_root
+    local dry=0
+    [[ "${1:-}" == "--dry-run" ]] && dry=1
+    banner
+
+    FAILURES=0
+    cmd_check >/dev/null 2>&1 || true
+    if (( FAILURES > 0 )); then
+        die "preflight failed. Run 'ik-os-migrate check' and resolve the blocking issues.
+Migration aborted (SDD §29)."
+    fi
+    [[ -r "${BACKUP_DEFAULT}/MANIFEST" ]] || die "no backup recorded. Run 'ik-os-migrate backup' first."
+
+    local root_dev; root_dev=$(findmnt -no SOURCE --target / | sed 's/\[.*\]//')
+    local disk;     disk=$(lsblk -no PKNAME "$root_dev" 2>/dev/null | head -1)
+
+    bold "Plan"
+    cat <<EOF
+  Target image ....... ${TARGET_IMAGE}
+  Install to ......... /dev/${disk}
+  Preserved .......... /home (and the user accounts recorded in the backup)
+  Replaced ........... /usr, /etc, the Fedora systemd units, the RPM database,
+                       rpm-ostree state and the Fedora kernel (SDD §30)
+  Not copied ......... Docker internal state, Fedora GNOME system config,
+                       the Homebrew install tree
+
+EOF
+    if (( dry )); then
+        bold "Dry run — nothing was changed (SDD §35)."
+        echo "Re-run without --dry-run to perform the migration."
+        return 0
+    fi
+
+    # SDD §35 — never destroy /home without explicit confirmation.
+    bold "This will replace the operating system on /dev/${disk}."
+    echo  "/home is preserved, but this operation is not reversible without a reinstall."
+    read -r -p "Type the hostname of this machine to continue: " answer
+    [[ "$answer" == "$(hostnamectl --static 2>/dev/null || hostname)" ]] \
+        || die "confirmation did not match. Nothing was changed."
+
+    mkdir -p "$STATE"; date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/install-started"
+
+    bold "Pulling ${TARGET_IMAGE}"
+    podman pull "$TARGET_IMAGE"
+
+    bold "Installing ik-os"
+    # bootc install to-existing-root replaces the OS while leaving /var (and so
+    # /var/home) in place. This is what makes SDD §30 and acceptance criterion
+    # 22 achievable without formatting /home.
+    podman run --rm --privileged --pid=host \
+        -v /:/target -v /var/lib/containers:/var/lib/containers \
+        -v /dev:/dev --security-opt label=type:unconfined_t \
+        "$TARGET_IMAGE" \
+        bootc install to-existing-root --acknowledge-destructive /target
+
+    date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/install-finished"
+    bold "ik-os installed."
+    echo "  Next: ik-os-migrate reboot"
+}
+
+cmd_reboot() {
+    need_root
+    [[ -r "${STATE}/install-finished" ]] || die "no completed install recorded. Run 'ik-os-migrate install' first."
+    bold "Rebooting into ik-os"
+    echo "After reboot, ik-os-firstboot restores Flatpaks, Homebrew packages and"
+    echo "Docker projects from ${BACKUP_DEFAULT} (SDD §31-§33)."
+    sleep 3
+    systemctl reboot
+}
+
+cmd_status() {
+    banner
+    bold "Migration state"
+    for f in preflight-report install-started install-finished; do
+        if [[ -r "${STATE}/${f}" ]]; then
+            printf '  %-20s %s\n' "$f" "$(head -1 "${STATE}/${f}")"
+        else
+            printf '  %-20s %s\n' "$f" "-"
+        fi
+    done
+    [[ -r "${BACKUP_DEFAULT}/MANIFEST" ]] && { echo; bold "Backup"; sed 's/^/  /' "${BACKUP_DEFAULT}/MANIFEST"; }
+}
+
+cmd_rollback() {
+    need_root
+    banner
+    bold "Rollback (SDD §35)"
+    if [[ ! -r "${STATE}/install-finished" ]]; then
+        echo "  No ik-os install has completed. The original OS is still in place;"
+        echo "  nothing to roll back."
+        return 0
+    fi
+    if bootc rollback 2>/dev/null; then
+        echo "  Queued the previous deployment. Reboot to return to it."
+    else
+        cat <<EOF
+  The previous Bluefin deployment is no longer available on this machine.
+
+  Recovery path:
+    1. Boot the Bluefin installation media.
+    2. Reinstall Bluefin, choosing to preserve the existing /home.
+    3. Restore from ${BACKUP_DEFAULT}.
+
+  Persistent user data under /home was not modified by the migration.
+EOF
+        return 1
+    fi
+}
+
+usage() {
+    cat <<'EOF'
+ik-os-migrate — Bluefin (Fedora) -> ik-os (Debian)
+
+  ik-os-migrate check                Preflight; reports without changing anything
+  ik-os-migrate backup [DIR]         Record Flatpak/Docker/Homebrew/user state
+  ik-os-migrate install [--dry-run]  Replace the OS, preserving /home
+  ik-os-migrate reboot               Reboot into ik-os
+  ik-os-migrate status               Where the migration got to
+  ik-os-migrate rollback             Return to the previous deployment
+
+This is a distribution migration, not `bootc switch`: Bluefin is Fedora-based
+and ik-os is Debian-based.
+EOF
+}
+
+case "${1:-}" in
+    check)    shift; cmd_check "$@" ;;
+    backup)   shift; cmd_backup "$@" ;;
+    install)  shift; cmd_install "$@" ;;
+    reboot)   shift; cmd_reboot "$@" ;;
+    status)   shift; cmd_status "$@" ;;
+    rollback) shift; cmd_rollback "$@" ;;
+    -h|--help|help|"") usage ;;
+    *) echo "unknown command: $1" >&2; usage >&2; exit 2 ;;
+esac

@@ -1,0 +1,19 @@
+# Flatpaks baked into the image at build time, instead of downloaded on first
+# boot. Every id here MUST also appear in system-flatpaks.list — that list stays
+# the single definition of the approved desktop, and ik-os-firstboot skips an app
+# it finds already installed, so a preinstalled app needs no special case there.
+#
+# Keep this list SHORT. The apps are not what costs anything (Bazaar is 22 MB,
+# Mission Center 34 MB); their runtime stack is ~2.4 GB, and it is only worth
+# paying once. Adding an app that shares org.gnome.Platform 50 is nearly free;
+# adding one on a different runtime costs another ~1 GB of image.
+# See docs/adr/0014-preinstalled-flatpaks.md.
+
+# The app store. Without it, a machine that cannot reach Flathub on first boot
+# has no way to install anything — including no way to see why.
+io.github.kolunmi.Bazaar
+
+# The task manager, which replaced gnome-system-monitor in the image itself
+# (ADR 0013). Something has to be able to show a hung process before the
+# Flatpak step has finished.
+io.missioncenter.MissionCenter

@@ -1,0 +1,48 @@
+#!/bin/bash
+# Send a desktop notification to a logged-in user from a system service.
+#
+# Provisioning that depends on a user account necessarily runs after that user
+# has been created, so the boot splash cannot report it. Without this the desktop
+# looks idle while several hundred megabytes download, and the natural reaction
+# is to report a broken machine or reboot into the middle of it.
+#
+# Usage: ik-os-notify [--wait SECONDS] <user> <urgency> <summary> [body]
+#
+# --wait is usually required, and its absence was a real bug. The callers are
+# triggered by /etc/passwd changing, which happens while gnome-initial-setup is
+# still CREATING the account — so at that moment the user has no session bus and
+# the message was silently discarded. Waiting a bounded time for the session to
+# appear is the difference between the user seeing the message and nobody ever
+# seeing it.
+#
+# Long-running progress does not belong here at all: it belongs in
+# ik-os-provisioning.service, a user unit that renders /run/ik-os/provisioning.status
+# from inside the session.
+#
+# Still silently does nothing when no session appears (console-only machine, a
+# test container) — never fail a provisioning step over a cosmetic message.
+set -euo pipefail
+
+wait_secs=0
+if [[ "${1:-}" == "--wait" ]]; then
+    wait_secs="${2:?--wait needs a number of seconds}"
+    shift 2
+fi
+
+user="${1:?user required}"; urgency="${2:?urgency required}"
+summary="${3:?summary required}"; body="${4:-}"
+
+uid=$(id -u "$user" 2>/dev/null) || exit 0
+command -v notify-send >/dev/null 2>&1 || exit 0
+
+waited=0
+while [[ ! -S "/run/user/${uid}/bus" ]]; do
+    (( waited >= wait_secs )) && exit 0
+    sleep 1
+    waited=$(( waited + 1 ))
+done
+
+exec sudo -u "$user" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${uid}/bus" \
+    notify-send --app-name="ik-os" --icon=system-software-install \
+        --urgency="$urgency" "$summary" "$body" >/dev/null 2>&1 || true

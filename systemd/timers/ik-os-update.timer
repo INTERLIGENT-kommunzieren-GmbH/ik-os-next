@@ -1,0 +1,12 @@
+[Unit]
+Description=ik-os image update check
+Documentation=https://github.com/interligent-kommunzieren-gmbh/ik-os-next
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1d
+RandomizedDelaySec=2h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

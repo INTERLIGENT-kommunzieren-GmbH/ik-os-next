@@ -1,0 +1,10 @@
+# GNOME extensions that Debian packages. Anything not listed here and required
+# by desktop/gnome/extensions/enabled.txt must be vendored with a pinned
+# revision in desktop/gnome/extensions/versions.lock (SDD §11, §12).
+
+gnome-shell-extension-arc-menu          # SDD §13 — replaces Search Light. Mandatory.
+gnome-shell-extension-dashtodock        # Bluefin-style dock
+gnome-shell-extension-appindicator      # tray icons; required by several company apps
+gnome-shell-extension-blur-my-shell     # Bluefin visual parity
+gnome-shell-extension-caffeine          # Bluefin parity
+gnome-shell-extension-gsconnect         # Bluefin parity

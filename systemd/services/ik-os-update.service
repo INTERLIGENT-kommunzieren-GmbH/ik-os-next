@@ -1,0 +1,16 @@
+[Unit]
+Description=ik-os image update check
+Documentation=man:bootc(8)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/usr/lib/ik-os/policy.env
+
+[Service]
+Type=oneshot
+# SDD §40 — image-based updates. The staged deployment activates on the next
+# reboot; nothing is applied to the running system underneath the user.
+EnvironmentFile=/usr/lib/ik-os/policy.env
+ExecCondition=/bin/sh -c '[ "$AUTO_UPDATE" = "true" ]'
+ExecStart=/usr/bin/bootc upgrade --quiet
+Nice=10
+IOSchedulingClass=idle

@@ -1,0 +1,29 @@
+[Unit]
+Description=Install Homebrew and apply the company Brewfile
+Documentation=https://github.com/interligent-kommunzieren-gmbh/ik-os-next
+# Downloads from GitHub and the Homebrew CDN.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Deliberately NOT RemainAfterExit=yes. This unit is also triggered by
+# ik-os-homebrew.path when the first account is created. With RemainAfterExit
+# the boot-time run (which finds no user and exits 0) leaves the unit "active
+# (exited)" forever, so systemd ignores every later path activation and Homebrew
+# is never installed. The script is idempotent, so re-running is free.
+# Runs while the user is already logged in, so it cannot be blocked behind a
+# splash. Inhibit shutdown instead: GNOME warns rather than silently
+# interrupting a multi-minute download.
+ExecStart=/usr/bin/systemd-inhibit \
+    --what=shutdown --mode=block --who="ik-os" \
+    --why="ik-os is installing developer tooling" \
+    /usr/libexec/ik-os/ik-os-homebrew
+# Homebrew bootstrap plus a Brewfile with casks is a long download.
+TimeoutStartSec=45min
+StandardOutput=journal
+
+[Install]
+# Runs at boot for accounts that already exist, and is additionally triggered by
+# ik-os-homebrew.path when gnome-initial-setup creates the first one.
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+# ik-os login-screen settings (SDD §14).
+#
+# Debian's gdm3 does NOT read /etc/dconf/db/gdm.d. Its /usr/share/gdm/generate-config
+# runs `dconf compile /var/lib/gdm3/greeter-dconf-defaults /usr/share/gdm/dconf`
+# as the Debian-gdm user, so company settings belong in that directory with a
+# prefix higher than 00-upstream-settings.
+
+[org/gnome/login-screen]
+logo='/usr/share/pixmaps/ik-os-logo.png'
+banner-message-enable=false
+disable-user-list=false
+
+[org/gnome/desktop/interface]
+color-scheme='prefer-dark'

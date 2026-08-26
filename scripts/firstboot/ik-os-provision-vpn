@@ -1,0 +1,72 @@
+#!/bin/bash
+# SDD §27 — provision the per-device VPN identity. The image never carries it.
+set -euo pipefail
+
+POLICY=/usr/lib/ik-os/policy.env
+# shellcheck disable=SC1090
+. "$POLICY"
+
+DEST=/var/lib/ik-os/vpn
+TEMPLATE=/usr/lib/ik-os/vpn/ik-office.nmconnection.in
+CONN=/etc/NetworkManager/system-connections/ik-office.nmconnection
+
+log() { printf '[ik-os-provision-vpn] %s\n' "$*"; }
+
+case "${VPN_PROVISION_MODE:-manual}" in
+    disabled)
+        log "VPN provisioning disabled by policy"; exit 0 ;;
+    enrollment)
+        [[ -n "${ENROLLMENT_URL:-}" ]] || { log "ENROLLMENT_URL unset"; exit 1; }
+        install -d -m0700 "$DEST"
+        log "fetching the device VPN bundle from the enrolment service"
+        curl -fsSL --cacert /etc/ssl/certs/ca-certificates.crt \
+             "${ENROLLMENT_URL%/}/vpn/bundle" -o /tmp/vpn-bundle.tar \
+            || { log "enrolment service unreachable"; exit 1; }
+        tar -xf /tmp/vpn-bundle.tar -C "$DEST"
+        rm -f /tmp/vpn-bundle.tar ;;
+    manual)
+        log "manual mode: expecting an administrator to place the bundle in ${DEST}" ;;
+    *)
+        log "unknown VPN_PROVISION_MODE=${VPN_PROVISION_MODE}"; exit 1 ;;
+esac
+
+install -d -m0700 "$DEST"
+PROVISIONED=yes
+if [[ ! -r "${DEST}/ik-office-cert.pem" || ! -r "${DEST}/ik-office-key.pem" ]]; then
+    PROVISIONED=no
+    log "no device certificate in ${DEST}"
+    log "the ik-office profile will be created but cannot connect until"
+    log "ik-office-{ca,cert,key,tls-crypt}.pem are placed there and this is re-run"
+fi
+chmod 0600 "${DEST}"/ik-office-key.pem "${DEST}"/ik-office-tls-crypt.pem 2>/dev/null || true
+chmod 0644 "${DEST}"/ik-office-ca.pem  "${DEST}"/ik-office-cert.pem      2>/dev/null || true
+
+# Reuse the existing UUID so re-running does not orphan the connection.
+if [[ -r "$CONN" ]]; then
+    UUID=$(awk -F= '/^uuid=/{print $2; exit}' "$CONN")
+else
+    UUID=$(uuidgen)
+fi
+
+install -d -m0755 /etc/NetworkManager/system-connections
+sed -e "s|@UUID@|${UUID}|" \
+    -e "s|@VPN_REMOTE@|${VPN_REMOTE}|" \
+    -e "s|@VPN_PORT@|${VPN_PORT}|" \
+    -e "s|@VPN_DNS@|${VPN_DNS}|" \
+    -e "s|@VPN_DNS_SEARCH@|${VPN_DNS_SEARCH}|" \
+    "$TEMPLATE" > "$CONN"
+chmod 0600 "$CONN"
+nmcli connection reload 2>/dev/null || true
+
+# Record the state so `ik-os diagnostics` can report it rather than leaving a
+# silently non-functional connection in the GNOME menu.
+install -d -m0755 /var/lib/ik-os
+printf 'provisioned=%s\nchecked_at=%s\n' "$PROVISIONED" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    > /var/lib/ik-os/vpn-state
+if [[ "$PROVISIONED" == "yes" ]]; then
+    log "ik-office VPN profile installed (credentials are prompted, never stored)"
+else
+    log "ik-office VPN profile created, but NOT provisioned — it will fail to"
+    log "connect until the device certificate is installed. See"
+    log "/usr/share/doc/ik-os/vpn.md"
+fi

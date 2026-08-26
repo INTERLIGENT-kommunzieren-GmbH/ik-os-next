@@ -1,0 +1,32 @@
+// SDD §23 — a user at the local console may add and manage a driverless
+// printer without becoming root.
+//
+// Action ids are verbatim from cups-pk-helper's
+// /usr/share/polkit-1/actions/org.opensuse.cupspkhelper.mechanism.policy.
+// Get one wrong and polkit silently ignores that clause: the panel still
+// prompts for an admin password with no indication why. verify-image.sh checks
+// every id here against the installed policy for exactly that reason.
+polkit.addRule(function(action, subject) {
+    var allowed = [
+        // Enumerate discovered printers — the Add Printer dialog is empty
+        // without it.
+        "org.opensuse.cupspkhelper.mechanism.devices-get",
+        // Add and remove a queue. This is the one SDD §23 is about.
+        "org.opensuse.cupspkhelper.mechanism.printeraddremove",
+        // Configure a queue that lives on this machine.
+        "org.opensuse.cupspkhelper.mechanism.printer-local-edit",
+        "org.opensuse.cupspkhelper.mechanism.printer-enable",
+        "org.opensuse.cupspkhelper.mechanism.printer-set-default",
+        // Manage one's own print jobs.
+        "org.opensuse.cupspkhelper.mechanism.job-edit"
+    ];
+    // Deliberately NOT granted, so these still require an admin password:
+    //   all-edit            — a blanket grant over every action above and below
+    //   server-settings     — rewrites cupsd.conf; SDD §52 owns that policy
+    //   printer-remote-edit — reconfiguring someone else's shared printer
+    //   class-edit          — printer classes, unused here
+    //   job-not-owned-edit  — cancelling another user's jobs
+    if (allowed.indexOf(action.id) >= 0 && subject.local && subject.active) {
+        return polkit.Result.YES;
+    }
+});

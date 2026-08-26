@@ -1,0 +1,23 @@
+# SDD §14 — Firefox is the company default browser.
+#
+# /etc/xdg is the sysadmin tier of the XDG association spec: it outranks the
+# vendor defaults in /usr/share/applications/mimeapps.list, and a user's own
+# ~/.config/mimeapps.list still outranks this — so GNOME Settings > Default
+# Applications keeps working. That is the intended three-tier split (SDD §14):
+# a company default, not a lock.
+#
+# Firefox rather than Chrome: Mozilla publishes and Flathub verifies the Firefox
+# build, while com.google.Chrome is community packaging around Google's binary.
+# Both are installed; only the default differs.
+#
+# The .desktop id is the Flatpak app id, which does not exist in the image —
+# first boot installs it. An association naming a missing .desktop is inert, so
+# this is safe to ship ahead of the app. 50-desktop.sh validates the id against
+# config/desktop/system-flatpaks.list.
+[Default Applications]
+x-scheme-handler/http=org.mozilla.firefox.desktop
+x-scheme-handler/https=org.mozilla.firefox.desktop
+x-scheme-handler/about=org.mozilla.firefox.desktop
+x-scheme-handler/unknown=org.mozilla.firefox.desktop
+text/html=org.mozilla.firefox.desktop
+application/xhtml+xml=org.mozilla.firefox.desktop

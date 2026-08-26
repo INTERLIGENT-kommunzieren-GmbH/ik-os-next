@@ -1,0 +1,99 @@
+#!/bin/bash
+# ik-os installer (SDD §36).
+#
+# Runs in the live environment and installs the ik-os image carried on the
+# medium. Deliberately small: partitioning and deployment are bootc's job.
+set -euo pipefail
+
+MEDIUM=/run/live/medium
+PAYLOAD="${MEDIUM}/ik-os/payload.oci"
+TARGET_REF=$(cat "${MEDIUM}/ik-os/target-ref" 2>/dev/null || echo "ik-os:testing")
+
+# Backend and bootloader come from config/image.env, staged onto the live
+# system at ISO build time, so this path cannot drift from `just build-qcow2`.
+# shellcheck disable=SC1091
+. /usr/lib/ik-os/image.env
+INSTALL_FLAGS=(--bootloader "${BOOTC_BOOTLOADER}")
+[[ "${BOOTC_BACKEND}" == "composefs" ]] && INSTALL_FLAGS+=(--composefs-backend)
+[[ "${BOOTC_ALLOW_MISSING_VERITY}" == "true" ]] && INSTALL_FLAGS+=(--allow-missing-verity)
+
+die() { whiptail --title "ik-os installer" --msgbox "$1" 14 72; exit 1; }
+
+[[ $EUID -eq 0 ]] || die "The installer must run as root."
+[[ -d /sys/firmware/efi ]] || die \
+"This machine booted in legacy BIOS mode.
+
+ik-os requires UEFI (SDD §5). Enable UEFI boot in the firmware setup and
+start the installer again."
+[[ -r "$PAYLOAD" ]] || die "The ik-os payload was not found at ${PAYLOAD}."
+
+# --- disk selection --------------------------------------------------------
+mapfile -t DISKS < <(lsblk -dnp -o NAME,SIZE,MODEL,TYPE | awk '$4=="disk"{print}')
+(( ${#DISKS[@]} )) || die "No disks were detected."
+
+MENU=()
+for d in "${DISKS[@]}"; do
+    dev=$(awk '{print $1}' <<<"$d")
+    desc=$(cut -d' ' -f2- <<<"$d")
+    MENU+=("$dev" "$desc")
+done
+
+TARGET=$(whiptail --title "ik-os installer" \
+    --menu "Select the disk to install ik-os on.\n\nEverything on the selected disk will be erased." \
+    20 76 8 "${MENU[@]}" 3>&1 1>&2 2>&3) || exit 1
+
+# --- explicit destructive confirmation (SDD §36) ---------------------------
+SUMMARY=$(lsblk -no NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT "$TARGET" | sed 's/^/  /')
+whiptail --title "Erase ${TARGET}?" --defaultno --yesno \
+"ik-os will be installed on ${TARGET}.
+
+ALL DATA ON THIS DISK WILL BE DESTROYED, including any existing /home.
+If you are migrating an existing workstation, stop now and use
+'ik-os-migrate' from the running system instead: it preserves /home.
+
+Current contents:
+${SUMMARY}
+
+Continue?" 22 76 || exit 1
+
+CONFIRM=$(whiptail --title "Confirm" --inputbox \
+"Type ERASE to confirm that ${TARGET} may be wiped." 10 70 3>&1 1>&2 2>&3) || exit 1
+[[ "$CONFIRM" == "ERASE" ]] || die "Confirmation did not match. Nothing was changed."
+
+# --- install ---------------------------------------------------------------
+clear
+echo "Installing ik-os on ${TARGET}..."
+echo "Source: ${PAYLOAD}"
+echo "Target reference: ${TARGET_REF}"
+echo
+
+# bootc owns partitioning, the ESP, the bootloader and the deployment.
+if bootc install to-disk \
+        --source-imgref "oci-archive:${PAYLOAD}" \
+        --target-imgref "${TARGET_REF}" \
+        --wipe \
+        --filesystem btrfs \
+        "${INSTALL_FLAGS[@]}" \
+        "$TARGET"; then
+    STATUS=ok
+else
+    STATUS=failed
+fi
+
+if [[ "$STATUS" == "failed" ]]; then
+    die "Installation failed. The system was not modified beyond ${TARGET}.
+Run 'journalctl -b' in the live shell for details."
+fi
+
+whiptail --title "ik-os installed" --msgbox \
+"ik-os has been installed on ${TARGET}.
+
+On the first boot the system will:
+  * create your user account
+  * install the approved Flatpak applications
+  * set up Homebrew and the company Brewfile
+  * verify Docker and CUPS
+
+Remove the installation medium and reboot." 18 72
+
+reboot

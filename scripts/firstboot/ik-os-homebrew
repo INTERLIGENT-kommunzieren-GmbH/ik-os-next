@@ -1,0 +1,209 @@
+#!/bin/bash
+# SDD §16 — install Homebrew and apply the company Brewfile.
+#
+# Like ik-os-user-groups, this is NOT a step in ik-os-firstboot. That service
+# runs at multi-user.target; on a fresh install gnome-initial-setup creates the
+# first account later, from inside the GDM session. There is no user to install
+# Homebrew as, so the step could only fail and wait for the next boot — which is
+# why `brew` was missing after a first boot. ik-os-homebrew.path fires when the
+# account actually appears.
+#
+# Idempotent: it exits early once the Brewfile is satisfied, and
+# `brew bundle install` is idempotent by design.
+#
+# This runs while the user is at their desktop, so it publishes progress to
+# /run/ik-os/provisioning.status. ik-os-provisioning.service — a USER unit in
+# the graphical session — renders it. It is deliberately not pushed from here:
+# this script is triggered by /etc/passwd changing, which happens while
+# gnome-initial-setup is still creating the account, so there is no session bus
+# to notify yet and every message sent from here was silently dropped.
+set -euo pipefail
+
+log() { printf '[ik-os-homebrew] %s\n' "$*"; }
+
+BREW=/home/linuxbrew/.linuxbrew/bin/brew
+BREWFILE=/usr/share/ik-os/Brewfile
+STATE=/var/lib/ik-os/homebrew
+STATUS=/run/ik-os/provisioning.status
+
+# Set once the Brewfile is known to have failed before without changing. The
+# work still runs; it just runs invisibly, so a cask that can never install does
+# not put a progress window on screen at every single login. Same split as the
+# boot splash in ADR 0010: whether there is work and whether the user should be
+# made to watch it are different questions.
+QUIET=no
+
+# state:   running | done | failed
+# total=0: indeterminate, the renderer pulsates rather than showing a percentage
+write_status() {
+    local state="$1" phase="${2:-}" detail="${3:-}" current="${4:-0}" total="${5:-0}"
+    local dir tmp
+    dir=$(dirname "$STATUS")
+    mkdir -p "$dir"
+    # Written atomically: the renderer polls this file and must never read a
+    # half-written one.
+    tmp=$(mktemp "${STATUS}.XXXXXX") || return 0
+    {
+        printf 'state=%s\n'   "$state"
+        printf 'phase=%s\n'   "$phase"
+        printf 'detail=%s\n'  "$detail"
+        printf 'current=%s\n' "$current"
+        printf 'total=%s\n'   "$total"
+    } > "$tmp"
+    chmod 0644 "$tmp"
+    mv -f "$tmp" "$STATUS"
+}
+# status() shifts its own args when quiet; normalise both call shapes.
+status() {
+    local state="$1"; shift
+    if [[ "$QUIET" == yes && "$state" == running ]]; then
+        state="running-quiet"
+    fi
+    write_status "$state" "$@"
+}
+
+as_user() { sudo -H -u "$u" "$@"; }
+
+first_user() {
+    awk -F: '$3 >= 1000 && $3 < 65000 && $7 !~ /(nologin|\/false)$/ {print $3":"$1}' \
+        /etc/passwd | sort -t: -k1,1n | cut -d: -f2 | head -1
+}
+
+u=$(first_user)
+if [[ -z "$u" ]]; then
+    log "no human account yet — will run again when one is created"
+    exit 0
+fi
+
+# SDD §16 — Homebrew is user-space: installed as the user, never as root, never
+# into /usr. /home/linuxbrew resolves to /var/home/linuxbrew, which persists.
+if [[ ! -x "$BREW" ]]; then
+    log "installing Homebrew as '${u}'"
+    # No percentage to report: this is one opaque download and clone. total=0
+    # tells the renderer to pulsate.
+    status running "Installing Homebrew" "" 0 0
+    install -d -o "$u" -g "$u" /var/home/linuxbrew
+    # -H so HOME is the target user's: the installer and the casks below write
+    # into it. NONINTERACTIVE because there is no tty here.
+    if ! as_user NONINTERACTIVE=1 bash -c \
+        "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
+        log "Homebrew installation FAILED — retrying on the next boot"
+        status failed "Homebrew could not be installed"
+        exit 1
+    fi
+    log "Homebrew installed"
+else
+    log "Homebrew already present"
+fi
+
+if [[ ! -r "$BREWFILE" ]]; then
+    log "no Brewfile at ${BREWFILE}"
+    status "done"
+    exit 0
+fi
+
+# Is there anything to do at all? `bundle check` compares the Brewfile against
+# what is installed, locally — NO_AUTO_UPDATE keeps it off the network. This is
+# the gate that makes a settled machine silent and instant, while a release that
+# adds a package is noticed and shown. A stamp of the Brewfile's hash would do
+# neither: it would not notice a package the user removed by hand.
+if as_user HOMEBREW_NO_AUTO_UPDATE=1 "$BREW" bundle check --file="$BREWFILE" >/dev/null 2>&1; then
+    log "Brewfile already satisfied — nothing to do"
+    rm -f "${STATE}/failed-for"
+    status "done"
+    exit 0
+fi
+
+BREWFILE_HASH=$(sha256sum "$BREWFILE" | cut -d' ' -f1)
+mkdir -p "$STATE"
+if [[ -r "${STATE}/failed-for" && "$(cat "${STATE}/failed-for")" == "$BREWFILE_HASH" ]]; then
+    QUIET=yes
+    log "this Brewfile failed before and has not changed — retrying without a progress window"
+fi
+
+# Counted from the file so the renderer can show "3 of 9". The Brewfile is Ruby
+# and one cask is gated on Framework hardware, so this can overshoot by one on
+# other machines; the renderer is told to jump to 100% on completion rather than
+# trusting the count to land exactly.
+TOTAL=$(grep -cE '^[[:space:]]*(brew|cask) "' "$BREWFILE" || true)
+
+status running "Preparing developer tools" "" 0 "$TOTAL"
+
+# Homebrew refuses to load a cask from a third-party tap until that tap is
+# explicitly trusted:
+#
+#   Error: Refusing to load cask ublue-os/tap/jetbrains-toolbox-linux from
+#   untrusted tap ublue-os/tap.
+#
+# `brew bundle` then reports overall success while silently installing nothing
+# from the tap. Trust is per-user (~/.homebrew/trust.json), so it must run as
+# the user, not root — and it must happen before the bundle.
+while IFS= read -r t; do
+    [[ -n "$t" ]] || continue
+    if as_user "$BREW" trust "$t" >/dev/null 2>&1; then
+        log "trusted tap ${t}"
+    else
+        log "could not trust tap ${t}: its casks will be skipped"
+    fi
+    # Tap it here rather than relying on the Brewfile's own `tap` line. Within a
+    # single `brew bundle` run the cask is evaluated BEFORE the tap is cloned,
+    # so a cask that only exists in that tap resolves against homebrew/cask and
+    # is discarded with "Skipping cask <name> (requires macOS)" — on Linux, for
+    # a Linux cask. bundle then reports success. It only works from the second
+    # run onwards, once the tap happens to already be on disk.
+    if as_user "$BREW" tap "$t" >/dev/null 2>&1; then
+        log "tapped ${t}"
+    else
+        log "could not tap ${t}: its casks will be skipped"
+    fi
+done < <(sed -nE 's/^tap "([^"]+)".*/\1/p' "$BREWFILE")
+
+log "applying the company Brewfile"
+status running "Installing developer tools" "" 0 "$TOTAL"
+
+# Progress comes from brew's own output. Fail-soft by construction: if these
+# lines ever change shape the counter simply never advances and the phase text
+# still shows — the window never depends on the parse succeeding.
+# Not fatal either: one unavailable cask must not mean no developer tooling at
+# all. `ik-os diagnostics` reports what is actually installed.
+{
+    as_user "$BREW" bundle install --file="$BREWFILE" 2>&1 || log "brew bundle reported an error"
+} | {
+    n=0
+    while IFS= read -r line; do
+        printf '%s\n' "$line"
+        case "$line" in
+            Installing\ *|Upgrading\ *|Using\ *)
+                n=$((n + 1))
+                status running "Installing developer tools" "${line#* }" "$n" "$TOTAL" ;;
+        esac
+    done
+}
+
+# `brew bundle install` exits 0 while silently skipping entries — an untrusted
+# tap, or a cask evaluated before its tap was cloned, both produce "complete!"
+# with the app missing. Ask separately whether the Brewfile is actually
+# satisfied, and fail the unit if not so it is visible and retried.
+status running "Checking developer tools" "" "$TOTAL" "$TOTAL"
+if as_user HOMEBREW_NO_AUTO_UPDATE=1 "$BREW" bundle check --file="$BREWFILE" >/dev/null 2>&1; then
+    log "Brewfile satisfied"
+    rm -f "${STATE}/failed-for"
+    status "done" "Developer tools ready"
+else
+    log "Brewfile NOT satisfied after install:"
+    # `|| true` is load-bearing under `set -euo pipefail`: this bundle check is
+    # here precisely because it FAILS, and with pipefail the pipeline's non-zero
+    # status kills the script on this line -- so the lines below it (recording
+    # which Brewfile failed, publishing state=failed) never ran. The progress
+    # window was left sitting at "Checking developer tools" forever and the
+    # failure was never recorded. Same shape as the bug in the version this
+    # replaces, where the "Developer tools incomplete" notification could never
+    # fire for exactly this reason.
+    as_user HOMEBREW_NO_AUTO_UPDATE=1 "$BREW" bundle check --file="$BREWFILE" 2>&1 \
+        | sed 's/^/  /' || true
+    # Remember WHICH Brewfile failed. An unchanged one retries silently next
+    # boot; a new release changes the hash and is shown again.
+    printf '%s\n' "$BREWFILE_HASH" > "${STATE}/failed-for"
+    status failed "Some developer tools did not install"
+    exit 1
+fi

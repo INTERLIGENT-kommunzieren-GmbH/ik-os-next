@@ -1,0 +1,19 @@
+[Unit]
+Description=Derive a per-machine hostname
+# Needs only /etc and machine-id. Deliberately NOT ordered after
+# network-online.target or docker.service the way ik-os-firstboot is: the
+# hostname must be right at the login prompt, not once provisioning finishes.
+After=local-fs.target
+# Set the static name before NetworkManager can apply a DHCP-supplied one, and
+# before the first login session renders a prompt with it.
+Before=NetworkManager.service systemd-user-sessions.service
+# machine-id is the fallback the derivation needs.
+ConditionPathExists=/etc/machine-id
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/ik-os/ik-os-hostname
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target

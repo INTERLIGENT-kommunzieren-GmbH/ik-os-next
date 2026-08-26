@@ -1,0 +1,130 @@
+#!/bin/bash
+# Render post-login provisioning progress (SDD §16, §37).
+#
+# Runs as a USER unit in the graphical session, which is the whole point. The
+# system services that do this work are triggered by /etc/passwd changing --
+# i.e. while gnome-initial-setup is still creating the account -- so at the
+# moment they start there is no session bus to notify and every message they
+# pushed was silently discarded. Nothing appeared until the work was already
+# finished. So they publish state instead, and this reads it once the session
+# exists, however late that is.
+set -euo pipefail
+
+STATUS=/run/ik-os/provisioning.status
+POLL=2
+# How long to wait for work to appear before concluding there is none, counted
+# in polls rather than seconds so POLL is never used in arithmetic. The writers
+# start at multi-user.target or on account creation, both of which precede the
+# session, so anything running is already visible on the first read; this window
+# only covers a service that starts unusually late.
+WAIT_POLLS=60   # 60 * POLL = two minutes
+
+log() { printf '[ik-os-provisioning] %s\n' "$*"; }
+
+# state / phase / detail / current / total, as written by ik-os-homebrew.
+state=""; phase=""; detail=""; current=0; total=0
+read_status() {
+    state=""; phase=""; detail=""; current=0; total=0
+    [[ -r "$STATUS" ]] || return 1
+    local k v
+    while IFS='=' read -r k v; do
+        case "$k" in
+            state) state="$v" ;; phase) phase="$v" ;; detail) detail="$v" ;;
+            current) current="$v" ;; total) total="$v" ;;
+        esac
+    done < "$STATUS"
+    [[ -n "$state" ]]
+}
+
+command -v zenity >/dev/null 2>&1 || { log "zenity is not installed"; exit 0; }
+
+# --- wait for something to render ------------------------------------------
+waited=0
+while :; do
+    if read_status; then
+        case "$state" in
+            running) break ;;
+            # running-quiet: work is happening, but it failed the same way last
+            # time and the Brewfile has not changed since. Deliberately silent.
+            done|failed|running-quiet) exit 0 ;;
+        esac
+    fi
+    (( waited >= WAIT_POLLS )) && exit 0
+    waited=$(( waited + 1 ))
+    sleep "$POLL"
+done
+
+# --- render ----------------------------------------------------------------
+# zenity's stdin protocol: a bare number sets the percentage, a "#"-prefixed
+# line replaces the text. So this is a poll loop writing lines, with no GTK of
+# our own. total=0 means indeterminate, which is a separate zenity invocation
+# because --pulsate cannot be turned off once the dialog is up.
+zenity_args=(--progress --title="Setting up this machine"
+             --width=420 --no-cancel --auto-close)
+# --pulsate cannot be toggled on a live dialog, and relaunching zenity mid-run to
+# switch modes means closing a window and immediately reopening it, which reads
+# as "it finished". So the mode is decided once, from the first state seen.
+#
+# In practice that means a first boot pulsates throughout: it starts in the
+# Homebrew bootstrap, which is one opaque clone and download with no countable
+# steps. The text still carries "(3 of 9)" once the bundle starts, so the count
+# is never lost -- only the bar's shape. A later run triggered by a release that
+# adds packages has no bootstrap, so it gets a real percentage from the start.
+(( total > 0 )) || zenity_args+=(--pulsate)
+
+render() {
+    local last_line=""
+    while :; do
+        read_status || break
+        case "$state" in
+            running)
+                local line="${phase}"
+                if [[ -n "$detail" ]]; then
+                    if (( total > 0 )); then
+                        line="${phase}\n${detail} (${current} of ${total})"
+                    else
+                        line="${phase}\n${detail}"
+                    fi
+                fi
+                line="${line}\n\nPlease don't restart until this finishes."
+                if [[ "$line" != "$last_line" ]]; then
+                    # %s, not %b: the "\n" sequences must reach zenity as the two
+                    # literal characters. zenity runs the text after "#" through
+                    # g_strcompress() and expands them itself. Expanding them
+                    # here instead emits real newlines, and since the protocol is
+                    # line-based every line after the first would be read as a
+                    # percentage rather than as text.
+                    printf '#%s\n' "$line"
+                    last_line="$line"
+                fi
+                (( total > 0 )) && printf '%d\n' $(( current * 100 / total ))
+                ;;
+            # Jump to 100 rather than trusting the counter to land there: the
+            # Brewfile is Ruby and one cask is gated on Framework hardware, so
+            # the count can overshoot on other machines.
+            done)   printf '100\n'; break ;;
+            # 100 closes the dialog too (--auto-close). Without it stdin just
+            # EOFs and zenity sits there with an OK button behind the failure
+            # notification, which reads as a second thing gone wrong.
+            failed) printf '100\n'; break ;;
+            *)      printf '100\n'; break ;;
+        esac
+        sleep "$POLL"
+    done
+}
+
+render | zenity "${zenity_args[@]}" || true
+
+# --- outcome ---------------------------------------------------------------
+read_status || exit 0
+command -v notify-send >/dev/null 2>&1 || exit 0
+case "$state" in
+    done)
+        notify-send --app-name="ik-os" --icon=system-software-install \
+            --urgency=low "Setup complete" \
+            "${phase:-This machine is ready to use.}" ;;
+    failed)
+        notify-send --app-name="ik-os" --icon=dialog-warning \
+            --urgency=normal "Setup incomplete" \
+            "${phase:-Some components did not install.} Run 'ik-os diagnostics' for detail." ;;
+esac

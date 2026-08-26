@@ -1,0 +1,12 @@
+[Unit]
+Description=Watch for new accounts to grant group membership
+Documentation=file:/usr/share/doc/ik-os/docker-security.md
+
+[Path]
+# gnome-initial-setup creates the first account long after multi-user.target,
+# from inside the GDM session. This is what notices.
+PathChanged=/etc/passwd
+Unit=ik-os-user-groups.service
+
+[Install]
+WantedBy=multi-user.target

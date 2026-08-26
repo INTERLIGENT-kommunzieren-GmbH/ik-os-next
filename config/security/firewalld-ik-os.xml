@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<zone>
+  <short>ik-os</short>
+  <description>
+    ik-os developer workstation. SDD §50/§52: no inbound services, but mDNS
+    egress and replies are permitted so that driverless printer discovery works.
+  </description>
+  <service name="mdns"/>
+  <!-- Deliberately NOT opened: ipp, ipp-client, ssh, samba.
+       CUPS listens on localhost only (config/cups/cupsd.conf). -->
+</zone>

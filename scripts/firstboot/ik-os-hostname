@@ -1,0 +1,42 @@
+#!/bin/bash
+# Give this machine a name IT can recognise in a fleet.
+#
+# Deliberately NOT a step in ik-os-firstboot. That service is ordered after
+# network-online.target, docker.service and flatpak-system-helper.service
+# because enrolment, VPN and Flatpak need them — so the hostname, which needs
+# none of them, was not set until all of that had come up. On a fresh boot the
+# machine still called itself "ik-os" at the login prompt.
+#
+# Running before NetworkManager also means the static name is in place before NM
+# could apply a DHCP-supplied one.
+set -euo pipefail
+
+log() { printf '[ik-os-hostname] %s\n' "$*"; }
+
+current=$(hostnamectl --static 2>/dev/null || cat /etc/hostname 2>/dev/null || true)
+case "$current" in
+    # "ik-os" is the placeholder the image ships (see Containerfile).
+    ''|localhost|localhost.localdomain|debian|debuerreotype|ik-os) ;;
+    *) log "hostname already set to '${current}' — leaving it"; exit 0 ;;
+esac
+
+# Prefer the hardware serial: stable across reinstalls and printed on the
+# chassis, so a machine can be identified without logging into it.
+id=""
+if [[ -r /sys/class/dmi/id/product_serial ]]; then
+    id=$(tr -cd '[:alnum:]' < /sys/class/dmi/id/product_serial | tr '[:upper:]' '[:lower:]')
+fi
+# Reject the placeholders vendors and hypervisors ship.
+case "$id" in
+    ''|none|tobefilledbyoem|default|system|notspecified|0123456789) id="" ;;
+esac
+# machine-id is generated per installation, so it is a stable fallback.
+[[ -n "$id" ]] || id=$(cut -c1-8 /etc/machine-id 2>/dev/null || true)
+if [[ -z "$id" ]]; then
+    log "cannot derive a hostname (no serial, no machine-id) — retrying next boot"
+    exit 1
+fi
+
+name="ik-${id:0:24}"
+hostnamectl set-hostname "$name"
+log "hostname set to '${name}'"

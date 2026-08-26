@@ -1,0 +1,16 @@
+# Anthropic's official Claude Desktop APT repository.
+#
+# Claude Desktop is not in Debian and not on Flathub, but Anthropic publishes a
+# first-party signed .deb from their own repository — so ik-os installs the
+# vendor's own package rather than a third-party repackaging.
+# See docs/adr/0007-claude-desktop.md and
+# https://code.claude.com/docs/en/desktop-linux
+#
+# The suite is release-agnostic (Origin: Anthropic, Suite: stable), so it does
+# not follow the Debian codename the rest of config/apt/debian.sources tracks.
+Types: deb
+URIs: https://downloads.claude.ai/claude-desktop/apt/stable
+Suites: stable
+Components: main
+Architectures: amd64 arm64
+Signed-By: /usr/share/keyrings/claude-desktop-archive-keyring.asc

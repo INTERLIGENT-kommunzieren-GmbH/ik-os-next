@@ -1,0 +1,36 @@
+# SDD §13 — ArcMenu replaces Search Light.
+#
+# Verified against gnome-shell-extension-arc-menu 69.2 (the version pinned in
+# desktop/gnome/extensions/versions.lock):
+#   menu-button-appearance is an enum; nick "None" (value 4) hides the button.
+#   arcmenu-hotkey and runner-hotkey are 'as' (string arrays).
+#   runner-hotkey opens the standalone runner, i.e. ArcMenu's search interface.
+
+[org/gnome/shell/extensions/arcmenu]
+# Rule 8 — the launcher button is never visible in the panel.
+menu-button-appearance='None'
+# Rule 9 — Super+Space opens ArcMenu's search (the standalone runner).
+runner-hotkey=['<Super>space']
+# The full menu keeps a separate binding; the bare Super key stays with GNOME.
+arcmenu-hotkey=@as []
+menu-layout='Modern'
+runner-position='Top_Centre'
+runner-search-display-style='List'
+show-activities-button=false
+
+# GNOME opens the Activities overview at every login and offers no gsetting to
+# stop it — the behaviour is a branch on Main.sessionMode.hasOverview inside the
+# shell's startup animation. ArcMenu already implements the standard workaround
+# (flip the flag while _startingUp, restore it on startup-complete), so this is
+# one key rather than another extension. Super and the overview work normally
+# once the desktop is up; ArcMenu is the search interface anyway (SDD §13).
+hide-overview-on-startup=true
+
+# SDD §13 — resolve the Super+Space conflict with GNOME input-source switching.
+# Leaving these bound would make the shortcut ambiguous on multi-layout systems.
+[org/gnome/desktop/wm/keybindings]
+switch-input-source=['<Super><Alt>space']
+switch-input-source-backward=['<Shift><Super><Alt>space']
+
+[org/gnome/shell/keybindings]
+toggle-application-view=@as []

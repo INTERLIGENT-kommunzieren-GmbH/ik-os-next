@@ -1,0 +1,26 @@
+# Packages for the ik-os live installer environment. This is NOT the ik-os
+# image: it is the throwaway system that runs the installer.
+linux-image-amd64
+live-boot
+systemd-sysv
+init
+udev
+dbus
+network-manager
+iproute2
+iputils-ping
+ca-certificates
+bootc-placeholder
+podman
+skopeo
+whiptail
+parted
+gdisk
+btrfs-progs
+e2fsprogs
+dosfstools
+util-linux
+kmod
+less
+nano
+zstd

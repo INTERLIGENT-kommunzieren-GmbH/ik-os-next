@@ -1,0 +1,24 @@
+# The enabled extension set. Kept in sync with
+# desktop/gnome/extensions/enabled.txt by build/scripts/50-desktop.sh, which
+# fails the build if the two disagree (SDD §11).
+
+[org/gnome/shell]
+disable-user-extensions=false
+
+[org/gnome/shell/extensions/dash-to-dock]
+# The prefs UI shows this inverted, as "Show overview on startup" (prefs.js binds
+# it with INVERT_BOOLEAN). It does not skip the overview by itself — ArcMenu's
+# hide-overview-on-startup does that. What this does is reset OverviewAdjustment,
+# which is constructed at WINDOW_PICKER and is only walked back to HIDDEN by the
+# startup animation we just skipped; without it the controls sit at WINDOW_PICKER
+# behind a closed overview. The two keys belong together; see 10-arcmenu.
+disable-overview-on-startup=true
+dock-position='BOTTOM'
+extend-height=false
+dock-fixed=false
+intellihide=true
+show-trash=false
+click-action='minimize-or-previews'
+
+[org/gnome/shell/extensions/blur-my-shell/panel]
+blur=true

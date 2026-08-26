@@ -1,0 +1,22 @@
+# SDD §3 — Backports is opt-in per package, never a blanket upgrade source.
+#
+# `forky-backports` does not exist until Debian 14 is released, so this file is
+# currently inert. It is kept in place, and referenced from debian.sources only
+# after release, so the pinning policy is ready rather than invented in a hurry
+# on the day a newer kernel is first needed.
+Package: *
+Pin: release a=forky-backports
+Pin-Priority: 100
+
+# Kernel + hardware enablement (SDD §9, §10), once Backports exists.
+Package: linux-image-amd64 linux-headers-amd64 linux-image-*-amd64 linux-kbuild-*
+Pin: release a=forky-backports
+Pin-Priority: 990
+
+Package: firmware-linux firmware-linux-nonfree firmware-misc-nonfree firmware-iwlwifi firmware-sof-signed firmware-amd-graphics firmware-realtek
+Pin: release a=forky-backports
+Pin-Priority: 990
+
+Package: fwupd libfwupd3 fwupd-signed
+Pin: release a=forky-backports
+Pin-Priority: 990

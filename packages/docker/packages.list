@@ -1,0 +1,15 @@
+# SDD §17. Debian packages only (Rule 17) — docker-compose in Debian stable is
+# Compose v2 (2.26.x, the Go implementation), so no vendored binary is needed.
+
+docker.io               # Docker Engine (dockerd lives in /usr/sbin)
+docker-cli              # the `docker` client. Debian only *Recommends* it from
+                        # docker.io, and ik-os installs with
+                        # --no-install-recommends, so it must be explicit —
+                        # without it `docker compose` has no front-end at all.
+docker-compose          # Compose v2; wired up as a CLI plugin in build/scripts
+docker-buildx           # SDD §17 requires buildx
+uidmap                  # rootless Docker evaluation path (SDD §51)
+dbus-user-session
+
+# SDD §18 — Podman MAY be present for OCI tooling but MUST NOT replace Docker.
+podman

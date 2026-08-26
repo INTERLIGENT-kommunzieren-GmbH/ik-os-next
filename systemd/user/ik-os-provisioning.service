@@ -1,0 +1,19 @@
+[Unit]
+Description=Show ik-os provisioning progress
+Documentation=https://github.com/interligent-kommunzieren-gmbh/ik-os-next
+# A USER unit, deliberately. The services doing the work are system units
+# triggered by an account being created, which happens before that account has a
+# session -- so they cannot notify anyone. They publish state; this renders it
+# from inside the session, where the display and the bus actually exist.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/ik-os/ik-os-provisioning-monitor
+# Cosmetic. A failure here must never look like a broken session.
+SuccessExitStatus=0 1
+StandardOutput=journal
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,20 @@
+# Framework laptop enablement (SDD §2, §10). Firmware comes from Backports,
+# pinned in config/apt/99-ik-os-backports.pref.
+
+firmware-linux
+firmware-linux-nonfree
+firmware-misc-nonfree
+firmware-iwlwifi                # Framework Intel Wi-Fi
+firmware-realtek
+firmware-sof-signed             # Framework audio (SOF DSP) on Intel and AMD
+firmware-amd-graphics           # Ryzen 7040 / Ryzen AI
+intel-media-va-driver           # Intel 11th-13th Gen / Core Ultra VA-API. The free driver from main is
+                                # used deliberately: the -non-free variant would require enabling the
+                                # whole non-free component for one package (Rule 11, Rule 17).
+mesa-va-drivers
+bluez
+fwupd                           # Framework firmware updates via LVFS
+thermald                        # Intel thermal management
+libfprint-2-2                   # fingerprint reader (Framework)
+fprintd
+libpam-fprintd

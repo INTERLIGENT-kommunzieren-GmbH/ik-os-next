@@ -1,0 +1,60 @@
+---
+name: Promote testing to stable
+
+# SDD §8 — a release only reaches stable after validation, and the previous
+# stable image must remain available for rollback.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to promote (e.g. testing.20260823.42)"
+        required: true
+      hardware-validation-ticket:
+        description: "Ticket recording hardware validation (SDD §9)"
+        required: true
+
+env:
+  IMAGE_NAME: ik-os
+  IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
+
+jobs:
+  promote:
+    name: Promote
+    runs-on: ubuntu-24.04
+    environment: stable     # requires a reviewer approval in repo settings
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Log in to GHCR
+        run: |
+          echo "IMAGE_REGISTRY=${IMAGE_REGISTRY,,}" >> "$GITHUB_ENV"
+          skopeo login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Verify the candidate is signed (SDD §45)
+        run: |
+          curl -sSfL -o cosign.pub https://raw.githubusercontent.com/${{ github.repository }}/main/config/company/cosign.pub
+          cosign verify --key cosign.pub \
+            "${IMAGE_REGISTRY}/${IMAGE_NAME}:${{ inputs.version }}"
+
+      - name: Keep the outgoing stable image available for rollback
+        run: |
+          IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAME}"
+          PREV=$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE}:stable" || true)
+          if [[ -n "$PREV" ]]; then
+            skopeo copy "docker://${IMAGE}@${PREV}" "docker://${IMAGE}:stable-previous"
+            echo "previous stable preserved as :stable-previous (${PREV})"
+          fi
+
+      - name: Promote
+        run: |
+          IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAME}"
+          skopeo copy --all \
+            "docker://${IMAGE}:${{ inputs.version }}" \
+            "docker://${IMAGE}:stable"
+          echo "promoted ${{ inputs.version }} -> stable"
+          echo "hardware validation: ${{ inputs.hardware-validation-ticket }}"

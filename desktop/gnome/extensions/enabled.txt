@@ -1,0 +1,17 @@
+# SDD §11 — the authoritative list of GNOME extensions ik-os enables.
+# One extension UUID per line. build/scripts/50-desktop.sh fails the build if a
+# UUID here is not actually present in the image.
+#
+# SDD §12 classification is recorded in versions.lock.
+
+# Order matters, and only for these first two. Both dash-to-dock and ArcMenu save
+# Main.sessionMode.hasOverview while the shell starts up and put it back on
+# startup-complete (docking.js:2470, arcmenu extension.js:30). GNOME enables
+# extensions serially in this order, so whichever comes second captures what the
+# first already changed, and its restore runs last and wins. With ArcMenu first,
+# dash-to-dock captures `false` and the session ends up with no overview at all.
+dash-to-dock@micxgx.gmail.com
+arcmenu@arcmenu.com
+ubuntu-appindicators@ubuntu.com
+blur-my-shell@aunetx
+caffeine@patapon.info

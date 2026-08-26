@@ -1,0 +1,175 @@
+# SDD §15 — the approved Flatpak application list, installed system-wide at
+# first boot by ik-os-firstboot.service.
+#
+# SDD §54 routes every GUI application here. That makes this file, not the
+# package lists, the place where the desktop is defined: the OS image stays a
+# minimal GNOME (shell, session, Files, Terminal, Text Editor, Disks) and
+# everything a user actually opens is a sandboxed, independently updated app.
+#
+# Every id must exist on Flathub — it is the only remote the image defines
+# (build/scripts/75-flatpak.sh). A typo installs nothing and is only visible in
+# the first-boot journal, so build/validation/check-flatpaks.sh resolves each
+# line against the Flathub API at validation time.
+
+# The graphical app store, replacing gnome-software.
+io.github.kolunmi.Bazaar
+
+# --- Browsers --------------------------------------------------------------
+# Browsers are the clearest case for §54: the most exposed application on the
+# machine, sandboxed, and updated independently of the image release cadence.
+
+# Mozilla's own build — publisher-verified on Flathub, MPL-2.0.
+# Also the default handler for http/https (config/desktop/mimeapps.list).
+org.mozilla.firefox
+
+# Google Chrome. Two things worth knowing, neither of them a blocker:
+#
+#   1. The Flathub packaging is community-maintained, NOT publisher-verified.
+#      What it ships, however, is Google's own signed .deb, pulled from
+#      dl.google.com against a pinned sha256 and run under the zypak sandbox
+#      shim — so the binary is first-party even though the wrapper is not.
+#   2. Being an "extra-data" package, installing it downloads that .deb from
+#      Google at install time. First boot therefore needs dl.google.com
+#      reachable, not just Flathub; and when Google rotates the stable version
+#      out of its pool, the pinned URL 404s until Flathub bumps the manifest.
+#      ik-os-firstboot retries and logs a failure per app rather than silently
+#      stamping the step done, so this surfaces instead of hiding.
+com.google.Chrome
+
+# Chromium-based third browser for testing and for sites that dislike Firefox.
+com.brave.Browser
+
+# --- Communication and PIM -------------------------------------------------
+
+# Unofficial Teams client (Microsoft ships no native Linux app). It lives in the
+# tray, which works because packages/desktop/extensions.list enables the
+# appindicator extension.
+com.github.IsmaelMartinez.teams_for_linux
+
+# Evolution is here for Exchange: it is the only Linux client with working EWS
+# calendar and address-book support.
+org.gnome.Evolution
+org.gnome.Calendar
+org.gnome.Contacts
+
+# --- Remote access ---------------------------------------------------------
+com.rustdesk.RustDesk
+org.gnome.Connections
+
+# Thincast pulls org.kde.Platform 5.15 (~975 MB) — see the runtime note at the
+# bottom of this file.
+com.thincast.client
+
+# --- Secrets and privacy ---------------------------------------------------
+# KeePassXC is the Qt application here, and also pulls org.kde.Platform 5.15.
+org.keepassxc.KeePassXC
+org.gnome.World.Secrets
+com.belmoussaoui.Obfuscate
+com.belmoussaoui.Decoder
+
+# --- Development -----------------------------------------------------------
+# CLI development tools come from Homebrew (SDD §54); these are the GUIs that
+# have no CLI equivalent.
+io.dbeaver.DBeaverCommunity
+io.podman_desktop.PodmanDesktop
+sh.loft.devpod
+me.iepure.devtoolbox
+
+# Postman still targets org.freedesktop.Platform 24.08 — see the runtime note.
+com.getpostman.Postman
+
+# --- Containers and compatibility ------------------------------------------
+com.usebottles.bottles
+io.github.prateekmedia.appimagepool
+
+# --- Flatpak and desktop management ----------------------------------------
+# On a Flatpak-first image these are not optional extras: Flatseal is the only
+# way to adjust an app's sandbox, and Ignition the only way to manage autostart
+# without writing into the immutable /usr.
+com.github.tchx84.Flatseal
+io.github.flattool.Ignition
+page.tesk.Refine
+
+# --- Graphics --------------------------------------------------------------
+org.gimp.GIMP
+org.inkscape.Inkscape
+com.github.PintaProject.Pinta
+be.alexandervanhee.gradia
+
+# --- Documents and office --------------------------------------------------
+org.libreoffice.LibreOffice
+
+# The image ships no document viewer at all, so without Papers a PDF has
+# nothing to open it with.
+org.gnome.Papers
+com.github.jeromerobert.pdfarranger
+com.jgraph.drawio.desktop
+md.obsidian.Obsidian
+
+# --- Files, archives and transfer ------------------------------------------
+# Likewise no GUI archive manager in the image: Files can browse a .zip through
+# gvfs, but "Extract Here" needs File Roller.
+org.gnome.FileRoller
+org.filezillaproject.Filezilla
+app.drey.Warp
+
+# --- Scanning and media writing --------------------------------------------
+# Pairs with the CUPS/SANE stack in packages/printing.
+org.gnome.SimpleScan
+io.gitlab.adhami3310.Impression
+
+# --- Media -----------------------------------------------------------------
+org.gnome.Showtime
+io.bassi.Amberol
+
+# No image viewer in the image either — without Loupe, double-clicking a JPEG
+# falls through to GIMP.
+org.gnome.Loupe
+org.gnome.Snapshot
+
+# Miracast/Chromecast screen sharing for meeting rooms.
+org.gnome.NetworkDisplays
+
+# --- System and hardware ---------------------------------------------------
+# Mission Center replaces gnome-system-monitor, which was dropped from
+# packages/desktop/packages.list — the task manager is a GUI app, so §54 puts
+# it here rather than in the immutable host.
+io.missioncenter.MissionCenter
+io.github.thetumultuousunicornofdarkness.cpu-x
+org.gnome.baobab
+org.gnome.Logs
+xyz.ketok.Speedtest
+io.github.pwr_solaar.solaar
+com.sidevesh.Luminance
+
+# --- Desk accessories ------------------------------------------------------
+# Calculator is in the same category as Papers and File Roller: absent from the
+# image, and referenced by Debian's own default dash favourites.
+org.gnome.Calculator
+org.gnome.Characters
+it.mijorus.smile
+org.gnome.clocks
+org.gnome.Weather
+org.gnome.Maps
+
+# Previews the Nerd Fonts that config/desktop/Brewfile installs as casks.
+org.gnome.font-viewer
+
+# --- Runtime footprint -----------------------------------------------------
+# These apps need six different runtimes, and three of them exist for a handful
+# of stragglers:
+#
+#   org.gnome.Platform 50          37 apps      1.1 GB
+#   org.freedesktop.Platform 25.08 12 apps      660 MB
+#   org.gnome.Platform 49           5 apps      1.1 GB
+#   org.kde.Platform 5.15-25.08     2 apps      974 MB   KeePassXC, Thincast
+#   org.gnome.Platform 47           1 app       1.0 GB   DevPod
+#   org.freedesktop.Platform 24.08  1 app       691 MB   Postman
+#
+# That is ~5.5 GB of runtime on top of ~6.7 GiB of applications, so first boot
+# pulls roughly 12 GB from Flathub. check-flatpaks.sh prints these numbers on
+# every run, which is the copy to trust if this block drifts.
+#
+# The last two are end-of-life branches: they receive no further security
+# updates, and each costs ~1 GB for one application. Worth revisiting when
+# DevPod and Postman move forward, or if either app can be dropped.

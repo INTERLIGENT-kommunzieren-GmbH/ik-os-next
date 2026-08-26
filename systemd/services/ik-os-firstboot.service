@@ -1,0 +1,44 @@
+[Unit]
+Description=ik-os first boot configuration
+Documentation=https://github.com/interligent-kommunzieren-gmbh/ik-os-next
+# SDD §37 — idempotent, so no ConditionPathExists guard: the script itself
+# tracks per-step completion and retries only what failed. Stamps are scoped per
+# image, so a bootc update that changes the Flatpak list or the VPN template
+# re-runs those steps; see docs/adr/0010-first-boot-reruns-per-image.md.
+After=network-online.target systemd-user-sessions.service
+Wants=network-online.target
+After=docker.service flatpak-system-helper.service
+# Hold the boot splash and the login screen until system provisioning is done,
+# so the user cannot start work on a half-configured machine. GDM is already
+# ordered After=plymouth-quit.service, so being Before= both keeps Plymouth up
+# and delays login; the script writes progress to the splash.
+#
+# Whether the user actually SEES that is decided in the script, not here: it
+# shows the setup screen only on the first boot of an image, and exits in
+# milliseconds on every boot after that. The ordering below is unconditional
+# because systemd resolves it before the unit runs, but a no-work run costs
+# nothing.
+#
+# Ordering only — if this unit fails or times out, GDM still starts. Failing
+# open matters: a machine that cannot reach the network must not be unbootable
+# to its user, it just retries on the next boot.
+Before=gdm.service plymouth-quit.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# systemd-inhibit blocks shutdown and reboot for the duration. Interrupting a
+# flatpak transaction or a package install mid-write is recoverable — every step
+# here is idempotent and retries — but it wastes the user's time and looks like
+# a broken machine, so GNOME is told to warn instead.
+ExecStart=/usr/bin/systemd-inhibit \
+    --what=shutdown:sleep:idle --mode=block --who="ik-os" \
+    --why="ik-os is still setting up this machine" \
+    /usr/libexec/ik-os/ik-os-firstboot
+# Shorter than it was, because this now delays the login screen. On timeout the
+# unit is killed, GDM starts, and the unfinished steps retry on the next boot.
+TimeoutStartSec=15min
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target

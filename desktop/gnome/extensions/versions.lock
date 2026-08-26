@@ -1,0 +1,36 @@
+# SDD §11, §12 — source and version of every extension, so the desktop cannot
+# drift when upstream changes.
+#
+# Versions are those of Debian 14 (forky), which ships GNOME 50. Extension and
+# GNOME Shell versions are tightly coupled: an extension built for Shell 48 does
+# not load on Shell 50, which is why the whole set moves together with the base
+# release rather than being pinned independently.
+#
+# Format: <uuid> <source> <version> <classification>
+#   source:         debian:<binary package>  |  vendor:<git url>
+#   classification: required | optional | unsupported | replaced-by-ik-os
+#
+# Extensions sourced from Debian are pinned by the image's package manifest
+# (/usr/share/ik-os/packages.manifest), which records the exact version used
+# for every release.
+
+arcmenu@arcmenu.com                     debian:gnome-shell-extension-arc-menu       69.2-1    required
+dash-to-dock@micxgx.gmail.com           debian:gnome-shell-extension-dashtodock     106-1     required
+# Debian ships the appindicator extension under Ubuntu's UUID, not the upstream
+# appindicatorsupport@rgcjonas.gmail.com one. Use what the package installs.
+ubuntu-appindicators@ubuntu.com         debian:gnome-shell-extension-appindicator   -         required
+blur-my-shell@aunetx                    debian:gnome-shell-extension-blur-my-shell  -         optional
+caffeine@patapon.info                   debian:gnome-shell-extension-caffeine       -         optional
+gsconnect@andyholmes.github.io          debian:gnome-shell-extension-gsconnect      -         optional
+
+# --- explicitly NOT shipped ------------------------------------------------
+# Rule 7 / SDD §13: Search Light is replaced by ArcMenu. tests/image/ asserts
+# that no Search Light extension is present in the image.
+search-light@icedman.github.com         none                                        -         replaced-by-ik-os
+
+# --- pending verification (SDD §12) ----------------------------------------
+# The exact current Bluefin extension set MUST be verified against a running
+# Bluefin system rather than inferred. Run:
+#     scripts/maintenance/compare-bluefin-extensions.sh
+# on a Bluefin machine and reconcile the output with this file before the M3
+# milestone is signed off.

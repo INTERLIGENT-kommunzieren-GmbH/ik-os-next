@@ -1,0 +1,154 @@
+---
+name: Build image
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**']
+  schedule:
+    # Weekly rebuild picks up Debian security updates (SDD §50).
+    - cron: "0 3 * * 3"
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Release channel to publish"
+        type: choice
+        options: [testing, stable]
+        default: testing
+
+env:
+  IMAGE_NAME: ik-os
+  IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
+  CHANNEL: ${{ inputs.channel || 'testing' }}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and push
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      image: ${{ steps.meta.outputs.image }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Free up disk space
+        uses: ublue-os/remove-unwanted-software@v9
+        with:
+          remove-codeql: true
+
+      - name: Prepare
+        id: meta
+        run: |
+          echo "IMAGE_REGISTRY=${IMAGE_REGISTRY,,}" >> "$GITHUB_ENV"
+          echo "image=${IMAGE_REGISTRY,,}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version=${CHANNEL}.$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      # SDD §5 — the testing and stable channels must Secure Boot, so the build
+      # is told to fail if the signing key is missing (Rule 18).
+      - name: Stage the Secure Boot signing key
+        if: github.event_name != 'pull_request' && env.MOK_KEY != ''
+        env:
+          MOK_KEY: ${{ secrets.SECURE_BOOT_MOK_KEY }}
+          MOK_CRT: ${{ secrets.SECURE_BOOT_MOK_CERT }}
+        run: |
+          mkdir -p secrets
+          printf '%s' "$MOK_KEY" > secrets/ik-os-mok.key
+          printf '%s' "$MOK_CRT" > secrets/ik-os-mok.crt
+          chmod 600 secrets/ik-os-mok.key
+          sed -i 's/^SECURE_BOOT_SIGNING=.*/SECURE_BOOT_SIGNING=required/' \
+            config/boot/secure-boot.env
+          sed -i 's|^SECURE_BOOT_KEY=.*|SECURE_BOOT_KEY=/ctx/secrets/ik-os-mok.key|' \
+            config/boot/secure-boot.env
+          sed -i 's|^SECURE_BOOT_CERT=.*|SECURE_BOOT_CERT=/ctx/secrets/ik-os-mok.crt|' \
+            config/boot/secure-boot.env
+
+      - name: Build image
+        id: build
+        run: |
+          podman build \
+            --build-arg "IK_OS_VERSION=${{ steps.meta.outputs.version }}" \
+            --build-arg "IK_OS_BUILD_ID=${GITHUB_RUN_ID}" \
+            --build-arg "IK_OS_CHANNEL=${CHANNEL}" \
+            --build-arg "SHA_HEAD_SHORT=$(git rev-parse --short HEAD)" \
+            --tag "${IMAGE_NAME}:${CHANNEL}" \
+            .
+          rm -rf secrets
+
+      - name: Record the release manifest
+        run: |
+          podman run --rm "${IMAGE_NAME}:${CHANNEL}" \
+            cat /usr/share/ik-os/release.env | tee release.env
+          podman run --rm "${IMAGE_NAME}:${CHANNEL}" \
+            cat /usr/share/ik-os/packages.manifest > packages.manifest
+          wc -l packages.manifest
+
+      # SDD §46 — every release ships an SBOM.
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE_NAME }}:${{ env.CHANNEL }}
+          format: spdx-json
+          output-file: ik-os.spdx.json
+          upload-artifact: false
+
+      - name: Upload build metadata
+        uses: actions/upload-artifact@v7
+        with:
+          name: ik-os-metadata-${{ env.CHANNEL }}
+          path: |
+            release.env
+            packages.manifest
+            ik-os.spdx.json
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        run: |
+          podman login ghcr.io \
+            -u "${{ github.actor }}" \
+            -p "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Push
+        id: push
+        if: github.event_name != 'pull_request'
+        run: |
+          IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAME}"
+          for tag in "${CHANNEL}" "${{ steps.meta.outputs.version }}"; do
+            podman push "${IMAGE_NAME}:${CHANNEL}" "docker://${IMAGE}:${tag}"
+          done
+          DIGEST=$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE}:${CHANNEL}")
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Pushed ${IMAGE}@${DIGEST}"
+
+      # SDD §45 — production images are signed, and signing uses a CI-held key,
+      # never a developer workstation.
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign the image by digest
+        if: github.event_name != 'pull_request'
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+        run: |
+          cosign sign -y --key env://COSIGN_PRIVATE_KEY \
+            "${IMAGE_REGISTRY}/${IMAGE_NAME}@${{ steps.push.outputs.digest }}"
+
+      - name: Attach the SBOM to the image
+        if: github.event_name != 'pull_request'
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+        run: |
+          cosign attest -y --predicate ik-os.spdx.json --type spdxjson \
+            --key env://COSIGN_PRIVATE_KEY \
+            "${IMAGE_REGISTRY}/${IMAGE_NAME}@${{ steps.push.outputs.digest }}"

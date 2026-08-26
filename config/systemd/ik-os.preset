@@ -1,0 +1,41 @@
+# SDD §50 — minimise unnecessary services and listening ports.
+enable ik-os-firstboot.service
+# The hostname must be right at the login prompt, so it is its own unit rather
+# than a firstboot step ordered behind network-online.target and docker.service.
+enable ik-os-hostname.service
+# SDD §17/§23/§51 — group membership for human accounts. The .path unit is what
+# catches the account gnome-initial-setup creates after multi-user.target.
+enable ik-os-user-groups.service
+enable ik-os-user-groups.path
+# SDD §16 — same reason: Homebrew installs as the first user, who does not
+# exist until gnome-initial-setup runs.
+enable ik-os-homebrew.service
+enable ik-os-homebrew.path
+enable ik-os-update.timer
+enable NetworkManager.service
+# NetworkManager owns the network (SDD §12). Debian also ships systemd-networkd
+# enabled, so both run, and network-online.target pulls in BOTH wait-online
+# units. networkd manages no interfaces here, so its wait-online blocks for its
+# full 2-minute timeout and then fails — delaying network-online.target, and
+# with it ik-os-firstboot and the login screen it now gates, by two minutes on
+# every boot for no benefit. It also leaves systemctl permanently "degraded".
+disable systemd-networkd.service
+disable systemd-networkd.socket
+disable systemd-networkd-wait-online.service
+enable NetworkManager-wait-online.service
+enable systemd-resolved.service
+enable systemd-timesyncd.service
+enable gdm.service
+enable docker.service
+enable cups.socket
+enable cups-browsed.service
+enable avahi-daemon.service
+enable ipp-usb.service
+enable fwupd.service
+enable firewalld.service
+enable bluetooth.service
+enable thermald.service
+
+# Not wanted on a workstation.
+disable ssh.service
+disable bootc-fetch-apply-updates.timer
