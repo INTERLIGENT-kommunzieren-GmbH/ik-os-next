@@ -22,9 +22,9 @@ Rejecting them buys no security and stops installation dead.
 
 So the policy defaults to `insecureAcceptAnything` and pins a `sigstoreSigned`
 requirement on the ik-os repository specifically. A pull of
-`ghcr.io/interligent-kommunzieren-gmbh/ik-os` — the thing SDD §45 is actually
+`ghcr.io/interligent-kommunzieren-gmbh/ik-os-next` — the thing SDD §45 is actually
 about — must carry a valid cosign signature made by the CI key, verified
-against `/etc/pki/containers/ghcr.io-ik-os.pub`. This is the same shape
+against `/etc/pki/containers/ghcr.io-ik-os-next.pub`. This is the same shape
 Universal Blue uses.
 
 ## If you tighten this

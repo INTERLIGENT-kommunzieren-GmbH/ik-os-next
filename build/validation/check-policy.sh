@@ -67,7 +67,7 @@ fi
 #    otherwise SDD §45 is not met and check 1 passes for the wrong reason.
 if jq -e '.transports.docker
           | to_entries
-          | map(select(.key | test("/ik-os$")))
+          | map(select(.key | test("/ik-os-next$")))
           | all(.value[0].type == "sigstoreSigned")
           and length > 0' "$POLICY" >/dev/null; then
     ok "the ik-os repository still requires a sigstore signature"

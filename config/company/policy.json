@@ -3,10 +3,10 @@
 
   "transports": {
     "docker": {
-      "ghcr.io/interligent-kommunzieren-gmbh/ik-os": [
+      "ghcr.io/interligent-kommunzieren-gmbh/ik-os-next": [
         {
           "type": "sigstoreSigned",
-          "keyPath": "/etc/pki/containers/ghcr.io-ik-os.pub",
+          "keyPath": "/etc/pki/containers/ghcr.io-ik-os-next.pub",
           "signedIdentity": { "type": "matchRepository" }
         }
       ]

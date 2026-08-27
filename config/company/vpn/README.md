@@ -30,7 +30,7 @@ as unprovisioned, and `ik-os diagnostics` reports it.
 ## Required action on the existing Bluefin image
 
 `ik-office-key.pem` and `ik-office-tls-crypt.pem` are committed to the
-`ik-os` repository and published inside `ghcr.io/.../ik-os`. Both must be
+`ik-os` repository and published inside `ghcr.io/.../ik-os-next`. Both must be
 treated as compromised: reissue the client certificate, regenerate the
 `tls-crypt` pre-shared key, and purge the old material from git history. Nothing
 in this repository can undo that exposure.

@@ -19,7 +19,7 @@ on:
         default: testing
 
 env:
-  IMAGE_NAME: ik-os
+  IMAGE_NAME: ik-os-next
   IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
   CHANNEL: ${{ inputs.channel || 'testing' }}
 

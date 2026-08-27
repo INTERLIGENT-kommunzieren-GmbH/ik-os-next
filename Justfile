@@ -1,4 +1,4 @@
-export image_name := env("IMAGE_NAME", "ik-os")
+export image_name := env("IMAGE_NAME", "ik-os-next")
 export default_tag := env("DEFAULT_TAG", "testing")
 export output_dir := env("OUTPUT_DIR", "output")
 

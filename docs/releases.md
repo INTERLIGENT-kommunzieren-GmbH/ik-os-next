@@ -2,10 +2,10 @@
 
 ## Channels (SDD §8)
 
-    ghcr.io/interligent-kommunzieren-gmbh/ik-os:testing
-    ghcr.io/interligent-kommunzieren-gmbh/ik-os:stable
-    ghcr.io/interligent-kommunzieren-gmbh/ik-os:stable-previous
-    ghcr.io/interligent-kommunzieren-gmbh/ik-os:<version>
+    ghcr.io/interligent-kommunzieren-gmbh/ik-os-next:testing
+    ghcr.io/interligent-kommunzieren-gmbh/ik-os-next:stable
+    ghcr.io/interligent-kommunzieren-gmbh/ik-os-next:stable-previous
+    ghcr.io/interligent-kommunzieren-gmbh/ik-os-next:<version>
 
 `testing` is built on every push to `main` and weekly. `stable` is only ever
 written by the **Promote testing to stable** workflow, which requires a
@@ -34,7 +34,7 @@ Deployments should pin by digest where possible (SDD §7).
 
 Every image pushed from `main` is signed with the key in the `SIGNING_SECRET`
 repository secret, and each image embeds the matching **public** key at
-`/etc/pki/containers/ghcr.io-ik-os.pub` (from `config/company/cosign.pub`). A
+`/etc/pki/containers/ghcr.io-ik-os-next.pub` (from `config/company/cosign.pub`). A
 machine verifies the image it is about to deploy against the public key its
 *current* image carries.
 

@@ -667,15 +667,15 @@ check "default is not a blanket reject"      bash -c '[ "$(jq -r ".default[0].ty
 check "containers-storage is permitted"      jq -e '.transports["containers-storage"]' /etc/containers/policy.json
 check "oci-archive is permitted (ISO path)"  jq -e '.transports["oci-archive"]' /etc/containers/policy.json
 check "the ik-os repo requires a signature" \
-    bash -c 'jq -e ".transports.docker[\"ghcr.io/interligent-kommunzieren-gmbh/ik-os\"][0].type == \"sigstoreSigned\"" /etc/containers/policy.json'
+    bash -c 'jq -e ".transports.docker[\"ghcr.io/interligent-kommunzieren-gmbh/ik-os-next\"][0].type == \"sigstoreSigned\"" /etc/containers/policy.json'
 check "the signing key it names is present" \
-    bash -c 'test -f "$(jq -r ".transports.docker[\"ghcr.io/interligent-kommunzieren-gmbh/ik-os\"][0].keyPath" /etc/containers/policy.json)"'
+    bash -c 'test -f "$(jq -r ".transports.docker[\"ghcr.io/interligent-kommunzieren-gmbh/ik-os-next\"][0].keyPath" /etc/containers/policy.json)"'
 # `test -f` passes on an empty or truncated file, which then fails every
 # signature check on every machine with a message about the signature rather
 # than about the key. Parse it as a real public key instead.
 signing_key_is_usable() {
     local path
-    path=$(jq -r '.transports.docker["ghcr.io/interligent-kommunzieren-gmbh/ik-os"][0].keyPath' \
+    path=$(jq -r '.transports.docker["ghcr.io/interligent-kommunzieren-gmbh/ik-os-next"][0].keyPath' \
         /etc/containers/policy.json)
     [[ -s "$path" ]] || return 1
     openssl pkey -pubin -in "$path" -noout 2>/dev/null

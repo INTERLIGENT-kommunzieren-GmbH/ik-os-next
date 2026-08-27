@@ -21,7 +21,7 @@ info "CA-IK installed into the system trust store"
 
 # --- image signature verification (SDD §45) --------------------------------
 install -Dm0644 "${CTX}/config/company/cosign.pub" \
-    "/etc/pki/containers/${IK_OS_REGISTRY_HOST:-ghcr.io}-ik-os.pub"
+    "/etc/pki/containers/${IK_OS_REGISTRY_HOST:-ghcr.io}-ik-os-next.pub"
 install -Dm0644 "${CTX}/config/company/policy.json" /etc/containers/policy.json
 install -Dm0644 "${CTX}/config/company/registries.d-ik-os.yaml" \
     /etc/containers/registries.d/ik-os.yaml

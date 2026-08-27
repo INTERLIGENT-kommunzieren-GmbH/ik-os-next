@@ -9,7 +9,7 @@ set -euo pipefail
 STATE=/var/lib/ik-os/migrate
 REPORT="${STATE}/preflight-report.txt"
 BACKUP_DEFAULT=/var/lib/ik-os/migrate/backup
-TARGET_IMAGE="${IK_OS_TARGET_IMAGE:-ghcr.io/interligent-kommunzieren-gmbh/ik-os:stable}"
+TARGET_IMAGE="${IK_OS_TARGET_IMAGE:-ghcr.io/interligent-kommunzieren-gmbh/ik-os-next:stable}"
 
 bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
 ok()    { printf '  \033[32m[ ok ]\033[0m %s\n' "$*"; }
