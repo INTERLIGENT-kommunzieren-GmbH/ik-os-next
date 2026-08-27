@@ -9,17 +9,26 @@ The first push to `main` failed at the registry:
 
     denied: permission_denied: write_package
 
-`ghcr.io/interligent-kommunzieren-gmbh/ik-os` already exists. It is public, and
-it was published by the **original** repository — whose `IMAGE_NAME` is
-`${{ github.event.repository.name }}`, i.e. `ik-os`. It carries `latest`,
-`stable`, dated variants of both, and cosign `.sig` attachments, last built
-2025-09-26. GHCR binds a package to the repository that created it, so
-`ik-os-next`'s `GITHUB_TOKEN` has no write access to it however many
-`packages: write` permissions the workflow requests.
+The initial reading of that error was that
+`ghcr.io/interligent-kommunzieren-gmbh/ik-os` already exists — published by the
+**original** repository, whose `IMAGE_NAME` is
+`${{ github.event.repository.name }}` — and that GHCR binds a package to the
+repository that created it, so this repository could not write to it.
 
-Granting the new repository write access to that package is a two-click change
-in the organisation's package settings, and it was the obvious fix. It is the
-wrong one, for a reason that has nothing to do with permissions.
+**That reading was wrong**, and it is recorded here because the conclusion
+survives it and the reasoning must not be mistaken for the diagnosis. Renaming
+the image produced exactly the same error on `ik-os-next`, a package that did
+not yet exist:
+
+    /v2/interligent-kommunzieren-gmbh/ik-os-next/blobs/uploads/ … denied: permission_denied: write_package
+
+So the denial is not about the old package. It is an organisation-level
+restriction on publishing packages, and it applies to every name. That is
+tracked separately; it is not what this ADR decides.
+
+What this ADR decides is the name, and the reason for it has nothing to do with
+permissions. Sharing a name with the deployed image would have been wrong even
+if the push had succeeded on the first attempt.
 
 One package name is one tag namespace. The moment this project published
 `stable`, it would replace the tag that every deployed machine follows for
@@ -57,6 +66,10 @@ silently verifies nothing:
 the check itself would fail rather than pass vacuously.
 
 ## Consequences
+
+Publishing is still blocked, by the organisation policy above. That is a
+credential and settings problem with its own fix, and this rename neither causes
+nor cures it.
 
 The deployed fleet is untouched. Nothing this repository builds can overwrite a
 tag the running image follows, whichever channel is published, and that property
