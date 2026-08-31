@@ -24,9 +24,23 @@ Key. `shim-signed` stays in the image so the chain is:
 
     firmware -> shim (Microsoft-signed) -> systemd-boot (ik-os MOK) -> kernel
 
-The key never exists on a developer workstation (SDD §45): it is held as the
-`SECURE_BOOT_MOK_KEY` / `SECURE_BOOT_MOK_CERT` CI secrets and mounted into the
-build.
+The two halves are stored differently, because only one of them is a secret:
+
+    config/company/ik-os-mok.crt      committed
+    SECURE_BOOT_MOK_KEY (CI secret)   never in the repository
+
+Committing the certificate is deliberate, and mirrors `config/company/cosign.pub`
+next to the private `SIGNING_SECRET`. It is public by construction — it ships in
+every signed image and every booting machine has it enrolled — and putting it in
+the tree buys a guard that nothing else can provide: the build compares the key
+it was handed against the certificate the fleet trusts, and refuses to sign if
+they differ. Without that comparison a MOK replaced by accident builds green and
+then fails to boot on every enrolled machine.
+
+`40-boot.sh` makes the same comparison for a local signed build, and treats a
+readable key with a missing certificate as an error rather than a reason to fall
+back to unsigned: the two halves go missing for different reasons, and answering
+a broken tree with a silently unbootable image is the wrong trade.
 
 `config/boot/secure-boot.env` controls the policy:
 
@@ -76,9 +90,10 @@ Three changes so the policy cannot be silently absent again:
    registry request; reading the file inside the image would cost a seven-
    gigabyte pull.
 
-The key/cert pair is also validated before the build starts — readable,
-unencrypted, and actually a pair. A mismatched pair signs happily and produces a
-binary the firmware rejects, which is otherwise discovered on the machine.
+The key is also validated before the build starts — readable, unencrypted (nothing
+can type a passphrase for `sbsign`), and matching the committed certificate. A
+mismatched pair signs happily and produces a binary the firmware rejects, which
+is otherwise discovered one machine at a time.
 
 ## Alternatives rejected
 
@@ -99,8 +114,8 @@ only installable through bootc's composefs backend. See
   Secure Boot state and names the command, because this is the one preflight
   item whose consequence is a black screen *after* a successful install rather
   than a failed install.
-- Until `SECURE_BOOT_MOK_KEY` and `SECURE_BOOT_MOK_CERT` are configured, builds
-  fail by default. That is the intended behaviour of Rule 18 and not a
+- Until `config/company/ik-os-mok.crt` is committed and `SECURE_BOOT_MOK_KEY` is
+  set, builds fail by default. That is the intended behaviour of Rule 18 and not a
   regression; `ALLOW_UNSIGNED_BOOTLOADER=yes` is the way to keep building
   meanwhile, at the cost of images that cannot Secure Boot and cannot be
   promoted without an explicit acknowledgement.

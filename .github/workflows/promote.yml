@@ -103,9 +103,10 @@ jobs:
           fi
 
           echo "::error title=Candidate cannot Secure Boot::${REF} has an unsigned bootloader (label: ${sb}). Rule 18: refusing to make it stable."
-          echo "Configure SECURE_BOOT_MOK_KEY and SECURE_BOOT_MOK_CERT, rebuild, and"
-          echo "promote the new version. To override deliberately, re-run this"
-          echo "workflow with acknowledge-unsigned-bootloader = yes."
+          echo "Commit config/company/ik-os-mok.crt and set the SECURE_BOOT_MOK_KEY"
+          echo "secret, rebuild, and promote the new version. To override"
+          echo "deliberately, re-run this workflow with"
+          echo "acknowledge-unsigned-bootloader = yes."
           exit 1
 
       - name: Keep the outgoing stable image available for rollback

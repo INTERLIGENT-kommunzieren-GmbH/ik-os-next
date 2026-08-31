@@ -216,40 +216,68 @@ An in-place switch across a key change would be refused.
 
 ## Secure Boot signing (SDD §5, ADR 0002)
 
-Two more secrets, and unlike `SIGNING_SECRET` the build **fails** without them:
+The Machine Owner Key is split the same way the cosign key is, and for the same
+reason: half of it is public and half of it must never be in the repository.
 
-    SECURE_BOOT_MOK_KEY    the Machine Owner Key, unencrypted PEM
-    SECURE_BOOT_MOK_CERT   the matching certificate
+| half | lives in | committed |
+| ---- | -------- | --------- |
+| certificate | `config/company/ik-os-mok.crt` | **yes** |
+| private key | the `SECURE_BOOT_MOK_KEY` secret | never |
 
-Unencrypted because `sbsign` cannot type a passphrase; the workflow asserts that
-with `openssl pkey -passin pass:` so an encrypted key fails in the first seconds
-rather than mid-build. It also checks the two are actually a pair — a mismatched
-pair signs without complaint and produces a binary the firmware rejects, which
-is otherwise found out on a machine.
+The certificate is committed on purpose. It is public by construction — it ships
+in every signed image at `/usr/share/ik-os/ik-os-mok.crt`, and any machine that
+boots ik-os has it enrolled — and having it in the tree is what lets the build
+assert that the key it was handed still matches the certificate the fleet
+trusts. A MOK swapped by accident would otherwise build green and then fail to
+boot on every machine already enrolled, which is the most expensive way to find
+out. `config/company/cosign.pub` and `config/company/CA-IK.crt` are there for
+the same reason.
+
+To set it up:
 
     openssl req -new -x509 -newkey rsa:2048 -nodes -days 3650 \
       -subj '/CN=INTERLIGENT kommunizieren GmbH ik-os MOK/' \
       -keyout ik-os-mok.key -out ik-os-mok.crt
-    gh secret set SECURE_BOOT_MOK_KEY  < ik-os-mok.key
-    gh secret set SECURE_BOOT_MOK_CERT < ik-os-mok.crt
 
-Store `ik-os-mok.key` durably and outside the repository, exactly like the
-cosign key: GitHub secrets are write-only, and losing it means every machine
-has to enrol a new certificate by hand.
+    cp ik-os-mok.crt config/company/ik-os-mok.crt   # public half, commit this
+    gh secret set SECURE_BOOT_MOK_KEY < ik-os-mok.key
 
-Losing it is not as bad as losing the cosign key, though, and the difference is
-worth knowing. The MOK signs a bootloader that ships *inside* an image; the
-cosign key signs the image a machine is about to trust. A new MOK can be rolled
-out by publishing a new image and enrolling the new certificate, which is
-tedious. A new cosign key cannot be rolled out by an image the fleet will not
+    # then move ik-os-mok.key somewhere durable, OUTSIDE the repository,
+    # next to the cosign key — and put a copy in the password manager
+
+Generate it outside the working tree. `ik-os-mok.key` is in `.gitignore`, and
+the Rule 13 check in `validate.yml` greps the whole tree for
+`BEGIN … PRIVATE KEY`, so a stray copy fails the build rather than shipping —
+but neither is a reason to create one there.
+
+`-nodes` — no passphrase — is not laziness. `sbsign` runs unattended in a
+container and nothing can type one, so the build asserts the key is unencrypted
+with `openssl pkey -passin pass:` and fails in the first seconds otherwise. The
+PEM is therefore the entire secret; treat the file accordingly.
+
+### If it is lost
+
+Less bad than losing the cosign key, and the difference is worth understanding.
+The MOK signs a bootloader that ships *inside* an image; the cosign key signs
+the image a machine is about to trust. A new MOK can be rolled out by publishing
+a new image and enrolling the new certificate on each machine — tedious, and it
+means a visit or a remote `ik-os enroll-mok import` plus a reboot per machine. A
+new cosign key cannot be rolled out at all by an image the fleet will not
 accept.
 
+Rotating deliberately means changing both halves in one commit: the certificate
+in the tree and the secret, then a new image, then enrolment. Machines keep
+booting the old image until they enrol, which is why the old certificate should
+stay enrolled until the fleet has moved.
+
+### Building before the MOK exists
+
 `ALLOW_UNSIGNED_BOOTLOADER=yes`, a repository *variable* rather than a secret,
-is the deliberate way to keep building before the MOK exists. It produces images
-that cannot Secure Boot, annotates every run that used it, and does not let
-`promote.yml` reach `stable` without a typed acknowledgement. Unset it as soon
-as the secrets are in place; nothing warns you that it is still on except the
-warning on each build, which is easy to stop reading.
+is the deliberate way through. It produces images that cannot Secure Boot,
+annotates every run that used it, and does not let `promote.yml` reach `stable`
+without a typed acknowledgement. Unset it as soon as the MOK is in place;
+nothing warns you it is still on except the warning on each build, which is easy
+to stop reading.
 
 ## Debian release transitions (SDD §47)
 

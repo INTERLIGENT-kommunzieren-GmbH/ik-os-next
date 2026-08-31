@@ -32,8 +32,29 @@ case "${SECURE_BOOT_SIGNING}" in
        policy; config/boot/secure-boot.env must say required or optional." ;;
 esac
 
+# The certificate is committed and the key is not, so the two go missing for
+# different reasons and must not collapse into one "no signing today" branch. A
+# readable key with no certificate is a repository that lost its public half, and
+# falling through to the unsigned path there would answer a broken tree with a
+# silently unbootable image.
+if [[ -r "${SECURE_BOOT_KEY:-}" && ! -r "${SECURE_BOOT_CERT:-}" ]]; then
+    die "a signing key is present but the certificate is not, at
+       ${SECURE_BOOT_CERT:-<unset>}.
+       The public half belongs in the repository (config/company/ik-os-mok.crt);
+       see docs/adr/0002-secure-boot.md."
+fi
+
 if [[ -r "${SECURE_BOOT_KEY:-}" && -r "${SECURE_BOOT_CERT:-}" ]]; then
     info "signing systemd-boot with the company Machine Owner Key"
+    # sbsign accepts a key and a certificate that have nothing to do with each
+    # other and produces a binary that only the firmware rejects. Compare the
+    # public halves first; `-passin pass:` because an encrypted key must fail
+    # here rather than block on a prompt nothing can answer.
+    if ! diff -q <(openssl pkey -in "$SECURE_BOOT_KEY" -passin pass: -pubout) \
+                 <(openssl x509 -in "$SECURE_BOOT_CERT" -noout -pubkey) >/dev/null; then
+        die "the signing key does not match ${SECURE_BOOT_CERT}.
+       Signing would produce a bootloader that no enrolled machine accepts."
+    fi
     sbsign --key "$SECURE_BOOT_KEY" --cert "$SECURE_BOOT_CERT" \
            --output "${BOOTEFI}.signed" "$BOOTEFI"
     mv "${BOOTEFI}.signed" "$BOOTEFI"
