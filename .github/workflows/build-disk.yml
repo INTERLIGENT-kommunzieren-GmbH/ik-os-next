@@ -20,6 +20,15 @@ env:
   IMAGE_NAME: ik-os-next
   IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
   CHANNEL: ${{ inputs.channel || 'testing' }}
+  # Virtual size of the disk image. The file is sparse, so this costs only what
+  # is actually written; it is a ceiling, not an allocation.
+  #
+  # 30G because the installed image is ~7 GB and first boot then pulls roughly
+  # 12 GB of Flatpaks and runtimes into /var/lib/flatpak — the figure
+  # build/validation/check-flatpaks.sh prints on every run. A 20G disk boots and
+  # then runs out of space during ik-os-firstboot, which is a far more expensive
+  # failure to diagnose than an oversized sparse file.
+  DISK_SIZE: 30G
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -60,6 +69,15 @@ jobs:
       - name: Install to disk
         run: |
           mkdir -p output
+
+          # --via-loopback attaches a loop device to an EXISTING file; bootc does
+          # not create one. Without this truncate the run dies on
+          #   error: Installing to disk: Querying /output/ik-os.raw:
+          #   No such file or directory (os error 2)
+          # which reads like a missing output rather than a missing input.
+          truncate -s "$DISK_SIZE" output/ik-os.raw
+          ls -l output/ik-os.raw
+
           sudo podman run --rm --privileged --pid=host \
             --security-opt label=type:unconfined_t \
             -v /var/lib/containers:/var/lib/containers \
@@ -69,6 +87,13 @@ jobs:
             bootc install to-disk --via-loopback --wipe \
               --filesystem btrfs /output/ik-os.raw
           sudo chown "$USER:$USER" output/ik-os.raw
+
+          # Apparent size is DISK_SIZE; the number that matters is what was
+          # actually written. Logged so a disk sized too small for the image, or
+          # an install that silently wrote nothing, is visible here.
+          echo "apparent: $(du -h --apparent-size output/ik-os.raw | cut -f1)"
+          echo "on disk : $(du -h output/ik-os.raw | cut -f1)"
+          [[ -s output/ik-os.raw ]] || { echo "::error::the disk image is empty"; exit 1; }
 
       - name: Convert to qcow2
         if: matrix.type == 'qcow2'
@@ -86,7 +111,11 @@ jobs:
           name: ik-os-${{ env.CHANNEL }}-${{ matrix.type }}
           path: output/
           if-no-files-found: error
-          compression-level: 0
+          # The qcow2 is already compressed by `qemu-img convert -c`, so
+          # recompressing it is wasted CPU. The raw image is the opposite case:
+          # a 30G sparse file whose holes upload as zeros, so leaving it
+          # uncompressed would push tens of gigabytes for a ~7 GB payload.
+          compression-level: ${{ matrix.type == 'raw' && 6 || 0 }}
 
       - name: Upload to S3
         if: inputs.upload-to-s3 == true
