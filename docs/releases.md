@@ -106,26 +106,50 @@ they match in the first seconds of the job rather than after the build:
 
     cosign public-key --key env://COSIGN_PRIVATE_KEY  ==  config/company/cosign.pub
 
-### rekor.sigstore.dev is in the critical path of every build
+### The SBOM is not in the transparency log, and must not be
 
 A build failed on 2026-08-31 *after* a successful push and a successful
 signature, at the SBOM attestation:
 
     POST https://rekor.sigstore.dev/api/v1/log/entries giving up after 4 attempt(s)
 
-cosign retries each HTTP request four times; it does not survive the public
-transparency log being briefly unavailable. Both cosign steps are now wrapped in
-three attempts with increasing backoff, so a blip costs a minute instead of a
-24-minute build.
+This was first read as a transient rekor outage and given three retries. **That
+was wrong** — all three attempts failed identically, and `cosign sign` had
+succeeded in the same job minutes earlier, which also writes to rekor. The
+difference is the payload:
 
-Worth knowing what the tlog is and is not doing here. The machine-side policy is
-`sigstoreSigned` with `keyPath` (`config/company/policy.json`) and never contacts
-rekor — an image verifies against the embedded public key alone. The transparency
-log buys *detectability of key misuse*, not verifiability. If its availability
-ever becomes intolerable, `cosign sign --tlog-upload=false` plus
-`--insecure-ignore-tlog` on the promote-side verify removes the dependency
-without weakening what the fleet actually checks. That is a deliberate trade, so
-it is written down rather than done.
+| call | payload | result |
+| ------------- | ---------------- | ------ |
+| `cosign sign` | a few hundred bytes | accepted |
+| `cosign attest` | **~49 MiB** SBOM, base64-encoded into the request | refused |
+
+The SBOM is that large because syft catalogues far more than packages:
+
+    packages       5,381     8.1 MB
+    files         51,091    29.7 MB
+    relationships 70,895    15.9 MB
+
+So the upload is deterministically impossible, not unlucky. `--tlog-upload=false`
+is now set on the attest step.
+
+There is a second, better reason for that flag. **The transparency log is public
+and immutable.** Uploading this SBOM would permanently publish the exact
+package-and-version inventory of every company machine — a precise list of what
+to look up CVEs against, unremovable once written. That is a disclosure decision
+and nobody made it.
+
+What is kept: the signature still goes to the log, because its payload is small
+and a log entry makes key misuse detectable. What is lost: nothing the fleet
+relies on. The machine-side policy is `sigstoreSigned` with `keyPath`
+(`config/company/policy.json`) and never contacts rekor — an image verifies
+against the embedded public key alone. The attestation is still attached to the
+image in the registry. Nothing in this repository verifies it today; whatever
+does must pass `--insecure-ignore-tlog`, because there is deliberately no entry
+to find.
+
+The full SBOM remains a build artefact on every run, which is where to read it.
+Shrinking it by disabling syft's file cataloguer would cut it by about 90% and is
+worth doing if the 49 MiB attestation layer becomes a problem.
 
 ### One credential file, two tools that disagree about where it is
 

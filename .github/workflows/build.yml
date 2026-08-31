@@ -229,18 +229,12 @@ jobs:
       # SDD §45 — production images are signed, and signing uses a CI-held key,
       # never a developer workstation. cosign is installed at the top of the job,
       # where the key is checked against the one the image embeds.
-      # Retried around the whole cosign invocation, not just its HTTP calls.
-      # cosign already retries a request four times; what it does not survive is
-      # rekor.sigstore.dev being briefly unavailable, which failed a build here
-      # on 2026-08-31 after a successful push:
+      # Both steps retry the whole cosign invocation, not just its HTTP calls,
+      # because a registry push can genuinely be flaky and cosign's own retry
+      # only covers a single request.
       #
-      #   POST https://rekor.sigstore.dev/api/v1/log/entries giving up after 4 attempt(s)
-      #
-      # The public transparency log is a free service in the critical path of
-      # every build. Rule 18 is still honoured — this fails if rekor is really
-      # down, it just does not discard 24 minutes of work over a blip. Note the
-      # machine-side policy (sigstoreSigned + keyPath) never consults rekor, so
-      # the tlog buys detectability of key misuse, not verifiability.
+      # The signature goes to the transparency log; the SBOM attestation does
+      # not. See the attest step for why — it is not a preference.
       - name: Sign the image by digest
         if: github.event_name != 'pull_request'
         env:
@@ -255,13 +249,33 @@ jobs:
           echo "::error::cosign sign failed three times — refusing to ship an unsigned image (Rule 18)"
           exit 1
 
+      # --tlog-upload=false, for two independent reasons.
+      #
+      # 1. It cannot work. The SBOM is ~49 MiB (5,381 packages, but also 51,091
+      #    catalogued files and 70,895 relationships), and cosign base64-encodes
+      #    the DSSE envelope into the request body. rekor.sigstore.dev refuses an
+      #    entry that size, deterministically — this failed three identical
+      #    retries on 2026-08-31 while `cosign sign`, whose payload is a few
+      #    hundred bytes, succeeded in the same job minutes earlier. It was never
+      #    a transient outage.
+      # 2. It should not work. The transparency log is public and immutable.
+      #    Uploading this SBOM publishes the exact package-and-version inventory
+      #    of every company machine, permanently and unremovably. That is a
+      #    disclosure decision, and nobody made it.
+      #
+      # The attestation is still attached to the image in the registry, which is
+      # where anything would look for it. Nothing in this repository verifies it
+      # today; whatever does must pass --insecure-ignore-tlog, because there is
+      # deliberately no log entry to find.
       - name: Attach the SBOM to the image
         if: github.event_name != 'pull_request'
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
         run: |
+          ls -l ik-os.spdx.json
           for attempt in 1 2 3; do
-            cosign attest -y --predicate ik-os.spdx.json --type spdxjson \
+            cosign attest -y --tlog-upload=false \
+              --predicate ik-os.spdx.json --type spdxjson \
               --key env://COSIGN_PRIVATE_KEY \
               "${IMAGE_REGISTRY}/${IMAGE_NAME}@${{ steps.push.outputs.digest }}" && exit 0
             echo "::warning::cosign attest failed (attempt ${attempt}/3), retrying"
