@@ -189,8 +189,30 @@ jobs:
             echo "authenticating with GITHUB_TOKEN (no PAT configured)"
             token="$GITHUB_TOKEN"
           fi
+
+          # One credential file, shared by both tools, because they disagree about
+          # where it lives: podman reads REGISTRY_AUTH_FILE, while cosign uses
+          # go-containerregistry and reads $DOCKER_CONFIG/config.json. Leave them
+          # to their defaults and `podman push` succeeds while `cosign sign` fails
+          # with UNAUTHORIZED on the same registry in the same job — which is
+          # exactly what happened on the first successful push. The formats are
+          # compatible, so one file serves both.
+          auth="${RUNNER_TEMP}/docker"
+          mkdir -p "$auth"
+          echo "DOCKER_CONFIG=${auth}"                >> "$GITHUB_ENV"
+          echo "REGISTRY_AUTH_FILE=${auth}/config.json" >> "$GITHUB_ENV"
+
           printf '%s' "$token" \
-            | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+            | podman login ghcr.io -u "${{ github.actor }}" --password-stdin \
+                --authfile "${auth}/config.json"
+
+          # Prove the file cosign will read actually carries the entry, here
+          # rather than after a 20-minute build and a completed push.
+          python3 -c "import json,sys; d=json.load(open(sys.argv[1])); \
+            sys.exit(0 if 'ghcr.io' in d.get('auths',{}) else 1)" \
+            "${auth}/config.json" \
+            || { echo "podman login wrote no ghcr.io entry to ${auth}/config.json"; exit 1; }
+          echo "credentials written to ${auth}/config.json for both podman and cosign"
 
       - name: Push
         id: push

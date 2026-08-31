@@ -103,7 +103,10 @@ org.libreoffice.LibreOffice
 # nothing to open it with.
 org.gnome.Papers
 com.github.jeromerobert.pdfarranger
-com.jgraph.drawio.desktop
+
+# draw.io is NOT here. Its Flathub package went end-of-life on 2026-08-31, frozen
+# at 30.0.4 with no successor, so it ships as a pinned upstream .deb instead —
+# build/scripts/52-drawio.sh and ADR 0016. The only §54 exception in this file.
 md.obsidian.Obsidian
 
 # --- Files, archives and transfer ------------------------------------------

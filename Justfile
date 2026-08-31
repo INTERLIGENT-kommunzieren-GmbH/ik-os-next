@@ -314,6 +314,11 @@ check-brewfile:
 check-flatpaks:
     ./build/validation/check-flatpaks.sh
 
+# Check the pinned draw.io release against upstream (ADR 0016)
+[group('Check')]
+check-drawio:
+    ./build/validation/check-drawio.sh
+
 # Behaviourally test the container signature policy
 [group('Check')]
 check-policy:

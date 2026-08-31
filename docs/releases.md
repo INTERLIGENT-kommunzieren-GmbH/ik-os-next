@@ -68,6 +68,11 @@ access → Add Repository → `ik-os-next`*, then raise the role from the defaul
 rather than Write so the same credential can prune old versions; Write alone
 covers upload and download. This mirrors `ik-os` exactly.
 
+This was **confirmed** by run `33374113914` on 2026-08-31: `Log in to GHCR` and
+`Push` both succeeded with `GITHUB_TOKEN` and no PAT, against the same package
+that had refused three earlier attempts. The only change between them was the
+ACL entry above.
+
 No PAT is required. `build.yml` and `promote.yml` prefer a `GHCR_TOKEN` secret
 and fall back to `GITHUB_TOKEN`, logging which one they used — so if the ACL is
 ever lost the failure names the credential that was tried. Leave `GHCR_TOKEN`
@@ -100,6 +105,29 @@ The two halves must therefore be rotated together, and `build.yml` checks that
 they match in the first seconds of the job rather than after the build:
 
     cosign public-key --key env://COSIGN_PRIVATE_KEY  ==  config/company/cosign.pub
+
+### One credential file, two tools that disagree about where it is
+
+`podman push` can succeed and `cosign sign` fail with `UNAUTHORIZED:
+unauthenticated` in the same job, against the same registry, seconds apart. They
+read different files:
+
+| tool | credential file |
+| ---------------- | ------------------------------------------ |
+| podman / skopeo  | `$REGISTRY_AUTH_FILE`, default `$XDG_RUNTIME_DIR/containers/auth.json` |
+| cosign           | `$DOCKER_CONFIG/config.json` (go-containerregistry) |
+
+The original repository never hit this because `docker/login-action` writes
+`~/.docker/config.json`, which is what cosign looks for. Moving to `podman
+login` broke signing while leaving the push working — so the build pushed an
+image and then failed to sign it, which is the right failure (Rule 18) reported
+in a misleading place.
+
+Both workflows now point `DOCKER_CONFIG` and `REGISTRY_AUTH_FILE` at one file in
+`$RUNNER_TEMP` and log in with `--authfile`. The formats are compatible. The
+login step then asserts that the file actually contains a `ghcr.io` entry, so
+this fails in the first seconds rather than after a 24-minute build and a
+completed push.
 
 **The private key cannot be read back out of GitHub.** Repository secrets are
 write-only: not by the API, not by a workflow log, not by the owner. If the only

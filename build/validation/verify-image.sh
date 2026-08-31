@@ -421,6 +421,40 @@ powercap_rule_matches_upstream() {
 }
 check "the powercap rule is the app's own"   powercap_rule_matches_upstream
 check "the first-run prompt is answered"     bash -c 'grep -q "^first-time-running=false$" /etc/skel/.var/app/io.missioncenter.MissionCenter/config/glib-2.0/settings/keyfile'
+# draw.io ships as an upstream .deb, not a Flatpak: the Flathub package is
+# end-of-life and frozen at 30.0.4 (ADR 0016). These checks cover the three ways
+# that can go wrong silently.
+check "draw.io is not in the Flatpak list"   bash -c '! grep -q "jgraph.drawio" /usr/share/ik-os/system-flatpaks.list'
+check "draw.io is installed in /usr"         test -x /usr/lib/drawio/drawio
+check "drawio is on PATH"                    test -x /usr/bin/drawio
+check "the release is recorded"              test -s /usr/share/ik-os/drawio.release
+# 1. The launcher. Upstream's Exec= names /opt/drawio, which cannot exist here
+#    (/opt -> var/opt, and 95-finalize.sh empties /var). A stale Exec= leaves an
+#    icon in the menu that does nothing at all when clicked.
+drawio_launcher_points_into_usr() {
+    local exec
+    exec=$(sed -nE 's/^Exec=([^ ]+).*/\1/p' /usr/share/applications/drawio.desktop | head -1)
+    [[ "$exec" == /usr/lib/drawio/drawio ]] && test -x "$exec"
+}
+check "the launcher points into /usr"        drawio_launcher_points_into_usr
+check "nothing still refers to /opt/drawio"  bash -c '! grep -q "/opt/drawio" /usr/share/applications/drawio.desktop'
+# 2. The privilege boundary. drawio's postinst sets chrome-sandbox 4755 whenever
+#    it cannot create a user namespace, which is always true in a rootless build
+#    container — so a setuid-root binary here means the maintainer scripts ran.
+drawio_has_no_setuid() {
+    [[ -z "$(find /usr/lib/drawio -perm /6000 -type f 2>/dev/null)" ]]
+}
+check "no setuid bits under /usr/lib/drawio" drawio_has_no_setuid
+check "chrome-sandbox is 0755, not 4755"     bash -c '[ "$(stat -c %a /usr/lib/drawio/chrome-sandbox)" = 755 ]'
+# 3. The dependencies. Nothing resolved them: the payload was unpacked, not
+#    installed, so apt never saw its Depends field. An Electron binary missing a
+#    library installs perfectly and dies the moment the icon is clicked.
+drawio_resolves_its_libraries() {
+    ! ldd /usr/lib/drawio/drawio 2>/dev/null | grep -q 'not found'
+}
+check "draw.io resolves its libraries"       drawio_resolves_its_libraries
+check ".drawio files have a MIME type"       bash -c 'grep -q "vnd.jgraph.mxfile" /usr/share/mime/globs2 2>/dev/null || grep -q "vnd.jgraph.mxfile" /usr/share/mime/globs'
+
 # Preinstalled Flatpaks (ADR 0014). A machine that cannot reach Flathub on first
 # boot still gets an app store and a task manager. Each has to be BOTH deployed
 # and exported: without the .desktop symlink the app is installed and invisible,

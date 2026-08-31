@@ -64,6 +64,14 @@ jobs:
         # GUI app through this list, so that is most of the desktop.
         run: REPO="$GITHUB_WORKSPACE" bash build/validation/check-flatpaks.sh
 
+      # draw.io is the one GUI app not delivered by Flathub (ADR 0016), so no
+      # update mechanism reaches it — the pin is the only thing that moves it.
+      # Warns rather than fails: upstream releases every few days.
+      - name: Check the pinned draw.io release against upstream
+        run: REPO="$GITHUB_WORKSPACE" bash build/validation/check-drawio.sh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   policy:
     name: SDD policy checks
     runs-on: ubuntu-24.04

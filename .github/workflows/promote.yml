@@ -47,8 +47,19 @@ jobs:
             echo "authenticating with GITHUB_TOKEN (no PAT configured)"
             token="$GITHUB_TOKEN"
           fi
+          # Same shared credential file as build.yml, and for the same reason:
+          # skopeo reads REGISTRY_AUTH_FILE, cosign reads $DOCKER_CONFIG. The
+          # `cosign verify` below happens to work anonymously while the package
+          # is public, so this is a latent failure rather than a current one —
+          # fixed here so making the package private is not a surprise.
+          auth="${RUNNER_TEMP}/docker"
+          mkdir -p "$auth"
+          echo "DOCKER_CONFIG=${auth}"                  >> "$GITHUB_ENV"
+          echo "REGISTRY_AUTH_FILE=${auth}/config.json" >> "$GITHUB_ENV"
+
           printf '%s' "$token" \
-            | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin
+            | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin \
+                --authfile "${auth}/config.json"
 
       - name: Verify the candidate is signed (SDD §45)
         run: |

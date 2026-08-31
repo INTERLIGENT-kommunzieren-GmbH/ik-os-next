@@ -105,6 +105,7 @@ RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
  && PREBUILT=/prebuilt /ctx/build/scripts/30-bootc.sh \
  && /ctx/build/scripts/40-boot.sh \
  && /ctx/build/scripts/50-desktop.sh \
+ && /ctx/build/scripts/52-drawio.sh \
  && /ctx/build/scripts/55-branding.sh \
  && /ctx/build/scripts/57-initramfs.sh \
  && /ctx/build/scripts/60-docker.sh \

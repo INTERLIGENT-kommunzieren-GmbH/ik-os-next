@@ -337,3 +337,31 @@ matches, and the check fails while the thing it checks is perfectly fine. Use
 
 **`podman build` warns that `SHELL` is ignored for OCI images.** Harmless: the
 build steps are `&&`-chained and each script sets its own `set -euo pipefail`.
+
+### draw.io is not a Flatpak, and nothing updates it for you
+
+Every other GUI application comes from Flathub. draw.io is the one exception
+(ADR 0016): its Flathub package went end-of-life frozen at 30.0.4 while upstream
+kept shipping, so the image installs a pinned upstream `.deb` instead.
+
+The consequence is that no update mechanism reaches it. Flathub does not, `apt`
+does not, and the image ships whatever `config/desktop/drawio.env` pins. To move
+it:
+
+    scripts/maintenance/update-drawio.sh          # latest upstream release
+    scripts/maintenance/update-drawio.sh 31.4.0   # a specific one
+
+That rewrites the version and the sha256 together — never edit the checksum by
+hand, because a version bumped without its checksum fails the build with a
+message about a corrupt download rather than about a stale pin.
+
+Two things about that `.deb` are worth knowing before touching
+`build/scripts/52-drawio.sh`. Its `Depends` are transcribed into
+`packages/desktop/packages.list` by hand, because unpacking a `.deb` means apt
+never reads them — and two of the names upstream declares do not exist in forky
+(`libgtk-3-0`, `libatspi2.0-0`; the `time_t` transition renamed both). And its
+postinst decides whether `chrome-sandbox` is setuid root by testing whether it
+can create a user namespace — which always fails in a rootless build container,
+so running it would bake a setuid binary into the image based on how the image
+was built. That is why maintainer scripts are skipped (ADR 0008), and the build
+asserts afterwards that no setuid bit survived.
