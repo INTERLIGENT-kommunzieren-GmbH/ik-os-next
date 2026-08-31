@@ -214,6 +214,43 @@ Rotation is safe here because migration is a reinstall rather than a
 and the new public key, so a new key never has to be verified by an old one.
 An in-place switch across a key change would be refused.
 
+## Secure Boot signing (SDD §5, ADR 0002)
+
+Two more secrets, and unlike `SIGNING_SECRET` the build **fails** without them:
+
+    SECURE_BOOT_MOK_KEY    the Machine Owner Key, unencrypted PEM
+    SECURE_BOOT_MOK_CERT   the matching certificate
+
+Unencrypted because `sbsign` cannot type a passphrase; the workflow asserts that
+with `openssl pkey -passin pass:` so an encrypted key fails in the first seconds
+rather than mid-build. It also checks the two are actually a pair — a mismatched
+pair signs without complaint and produces a binary the firmware rejects, which
+is otherwise found out on a machine.
+
+    openssl req -new -x509 -newkey rsa:2048 -nodes -days 3650 \
+      -subj '/CN=INTERLIGENT kommunizieren GmbH ik-os MOK/' \
+      -keyout ik-os-mok.key -out ik-os-mok.crt
+    gh secret set SECURE_BOOT_MOK_KEY  < ik-os-mok.key
+    gh secret set SECURE_BOOT_MOK_CERT < ik-os-mok.crt
+
+Store `ik-os-mok.key` durably and outside the repository, exactly like the
+cosign key: GitHub secrets are write-only, and losing it means every machine
+has to enrol a new certificate by hand.
+
+Losing it is not as bad as losing the cosign key, though, and the difference is
+worth knowing. The MOK signs a bootloader that ships *inside* an image; the
+cosign key signs the image a machine is about to trust. A new MOK can be rolled
+out by publishing a new image and enrolling the new certificate, which is
+tedious. A new cosign key cannot be rolled out by an image the fleet will not
+accept.
+
+`ALLOW_UNSIGNED_BOOTLOADER=yes`, a repository *variable* rather than a secret,
+is the deliberate way to keep building before the MOK exists. It produces images
+that cannot Secure Boot, annotates every run that used it, and does not let
+`promote.yml` reach `stable` without a typed acknowledgement. Unset it as soon
+as the secrets are in place; nothing warns you that it is still on except the
+warning on each build, which is easy to stop reading.
+
 ## Debian release transitions (SDD §47)
 
 The image tracks the floating `stable` suite. `build/scripts/00-preflight.sh`

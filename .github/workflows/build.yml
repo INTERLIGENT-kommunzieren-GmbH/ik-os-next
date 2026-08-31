@@ -84,33 +84,101 @@ jobs:
           echo "image=${IMAGE_REGISTRY,,}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
           echo "version=${CHANNEL}.$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
-      # SDD §5 — the testing and stable channels must Secure Boot, so the build
-      # is told to fail if the signing key is missing (Rule 18).
+      # SDD §5 — the testing and stable channels must Secure Boot, so a missing
+      # signing key has to stop the build (Rule 18).
+      #
+      # This step used to carry `&& env.MOK_KEY != ''` in its own `if:`, and it is
+      # also the only place that sets SECURE_BOOT_SIGNING=required. The two
+      # together made the guard unreachable: no secret meant the step was
+      # skipped, which left the committed default of `optional` in place, so
+      # 40-boot.sh took its developer-build branch and published an image with an
+      # unsigned bootloader under a green tick. The condition that was supposed
+      # to enforce signing was the condition that disabled the enforcement.
+      #
+      # The step now always runs off a pull request and decides in the open.
       - name: Stage the Secure Boot signing key
-        if: github.event_name != 'pull_request' && env.MOK_KEY != ''
+        if: github.event_name != 'pull_request'
         env:
           MOK_KEY: ${{ secrets.SECURE_BOOT_MOK_KEY }}
           MOK_CRT: ${{ secrets.SECURE_BOOT_MOK_CERT }}
+          ALLOW_UNSIGNED: ${{ vars.ALLOW_UNSIGNED_BOOTLOADER }}
         run: |
-          mkdir -p secrets
-          printf '%s' "$MOK_KEY" > secrets/ik-os-mok.key
-          printf '%s' "$MOK_CRT" > secrets/ik-os-mok.crt
-          chmod 600 secrets/ik-os-mok.key
-          sed -i 's/^SECURE_BOOT_SIGNING=.*/SECURE_BOOT_SIGNING=required/' \
-            config/boot/secure-boot.env
-          sed -i 's|^SECURE_BOOT_KEY=.*|SECURE_BOOT_KEY=/ctx/secrets/ik-os-mok.key|' \
-            config/boot/secure-boot.env
-          sed -i 's|^SECURE_BOOT_CERT=.*|SECURE_BOOT_CERT=/ctx/secrets/ik-os-mok.crt|' \
-            config/boot/secure-boot.env
+          if [[ -n "$MOK_KEY" && -n "$MOK_CRT" ]]; then
+            mkdir -p secrets
+            printf '%s' "$MOK_KEY" > secrets/ik-os-mok.key
+            printf '%s' "$MOK_CRT" > secrets/ik-os-mok.crt
+            chmod 600 secrets/ik-os-mok.key
+
+            # Validate the pair here rather than letting sbsign discover it 20
+            # minutes into the build. `-passin pass:` instead of a prompt on
+            # purpose: sbsign cannot type a passphrase either, so an encrypted
+            # key must fail now and say why.
+            if ! openssl pkey -in secrets/ik-os-mok.key -passin pass: -noout 2>/dev/null; then
+              echo "::error::SECURE_BOOT_MOK_KEY is not a readable unencrypted private key."
+              exit 1
+            fi
+            if ! openssl x509 -in secrets/ik-os-mok.crt -noout 2>/dev/null; then
+              echo "::error::SECURE_BOOT_MOK_CERT is not a readable certificate."
+              exit 1
+            fi
+            # A mismatched pair signs happily and produces a binary the firmware
+            # rejects, which is only discovered on the machine.
+            if ! diff -q \
+                 <(openssl pkey -in secrets/ik-os-mok.key -passin pass: -pubout) \
+                 <(openssl x509 -in secrets/ik-os-mok.crt -noout -pubkey) >/dev/null; then
+              echo "::error::SECURE_BOOT_MOK_KEY and SECURE_BOOT_MOK_CERT are not a pair."
+              exit 1
+            fi
+            echo "MOK subject: $(openssl x509 -in secrets/ik-os-mok.crt -noout -subject)"
+            echo "MOK expires: $(openssl x509 -in secrets/ik-os-mok.crt -noout -enddate)"
+
+            sed -i 's/^SECURE_BOOT_SIGNING=.*/SECURE_BOOT_SIGNING=required/' \
+              config/boot/secure-boot.env
+            sed -i 's|^SECURE_BOOT_KEY=.*|SECURE_BOOT_KEY=/ctx/secrets/ik-os-mok.key|' \
+              config/boot/secure-boot.env
+            sed -i 's|^SECURE_BOOT_CERT=.*|SECURE_BOOT_CERT=/ctx/secrets/ik-os-mok.crt|' \
+              config/boot/secure-boot.env
+            echo "SECURE_BOOT_EXPECTED=yes" >> "$GITHUB_ENV"
+            echo "systemd-boot will be signed with the company MOK (SECURE_BOOT_SIGNING=required)"
+            exit 0
+          fi
+
+          # No key. Rule 18 says fail rather than ship something that cannot
+          # Secure Boot — but silently red is no better than silently unsigned,
+          # so there is one deliberate, auditable way past it: the repository
+          # variable ALLOW_UNSIGNED_BOOTLOADER=yes. Setting a variable is a
+          # recorded act in the repository settings; the skipped step was not.
+          if [[ "$ALLOW_UNSIGNED" == "yes" ]]; then
+            echo "SECURE_BOOT_EXPECTED=no" >> "$GITHUB_ENV"
+            echo "::warning title=Unsigned bootloader::ALLOW_UNSIGNED_BOOTLOADER=yes, so this build produces an image that CANNOT Secure Boot (SDD §5). It is not promotable to stable. Unset the variable once SECURE_BOOT_MOK_KEY and SECURE_BOOT_MOK_CERT are configured."
+            exit 0
+          fi
+
+          echo "::error title=No Secure Boot signing key::SECURE_BOOT_MOK_KEY and SECURE_BOOT_MOK_CERT are not set, so systemd-boot cannot be signed and the image will not Secure Boot (SDD §5, ADR 0002). Rule 18: refusing to publish it."
+          echo "To fix, generate a Machine Owner Key and add both secrets:"
+          echo "  openssl req -new -x509 -newkey rsa:2048 -nodes -days 3650 \\"
+          echo "    -subj '/CN=INTERLIGENT kommunizieren GmbH ik-os MOK/' \\"
+          echo "    -keyout ik-os-mok.key -out ik-os-mok.crt"
+          echo "  gh secret set SECURE_BOOT_MOK_KEY  < ik-os-mok.key"
+          echo "  gh secret set SECURE_BOOT_MOK_CERT < ik-os-mok.crt"
+          echo "Or, to keep building unsigned images deliberately and on the record:"
+          echo "  gh variable set ALLOW_UNSIGNED_BOOTLOADER --body yes"
+          exit 1
 
       - name: Build image
         id: build
         run: |
+          # The label lets promote.yml check the Secure Boot state from the
+          # registry metadata alone. It records this workflow's intent, not the
+          # image's content — but verify-image.sh runs inside the build and fails
+          # if `required` did not produce a signed binary, so a label of "yes" on
+          # an image that exists means the binary is signed.
           podman build \
             --build-arg "IK_OS_VERSION=${{ steps.meta.outputs.version }}" \
             --build-arg "IK_OS_BUILD_ID=${GITHUB_RUN_ID}" \
             --build-arg "IK_OS_CHANNEL=${CHANNEL}" \
             --build-arg "SHA_HEAD_SHORT=$(git rev-parse --short HEAD)" \
+            --label "com.interligent.ik-os.secureboot=${SECURE_BOOT_EXPECTED:-no}" \
             --tag "${IMAGE_NAME}:${CHANNEL}" \
             .
           rm -rf secrets

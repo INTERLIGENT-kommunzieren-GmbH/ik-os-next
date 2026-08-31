@@ -75,7 +75,10 @@ info "$(wc -l < /usr/share/ik-os/packages.manifest) packages recorded"
     cat /usr/share/ik-os/build-base.env
     cat /usr/share/ik-os/build-kernel.env
     cat /usr/share/ik-os/build-bootc.env
-    cat /usr/share/ik-os/build-secureboot.env 2>/dev/null || true
+    # Comments stripped: build-secureboot.env explains itself for a human
+    # reading it in the image, but release.env is also parsed by hand in
+    # places and its comment budget is better spent elsewhere.
+    grep -v '^#' /usr/share/ik-os/build-secureboot.env 2>/dev/null || true
     echo "IK_OS_VERSION=\"${IK_OS_VERSION:-dev}\""
     echo "IK_OS_BUILD_ID=\"${IK_OS_BUILD_ID:-local}\""
     echo "IK_OS_GIT_COMMIT=\"${SHA_HEAD_SHORT:-unknown}\""

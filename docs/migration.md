@@ -73,6 +73,44 @@ touching the disk. `ik-os-migrate rollback` queues the previous deployment if
 one still exists; if it does not, the tool prints the recovery path. `/home` is
 not modified by the migration in either case.
 
+## Enrolling the Secure Boot key, and the password everybody asks about
+
+ik-os signs systemd-boot with a company Machine Owner Key (ADR 0002), so a
+machine with Secure Boot enabled will not start ik-os until that certificate is
+enrolled. `ik-os-migrate check` says so before the install; the enrolment itself
+happens after it:
+
+    ik-os enroll-mok status      # state, certificate, whether it is enrolled
+    sudo ik-os enroll-mok import # record the request, then reboot
+
+**There is no ik-os Secure Boot password.** `mokutil --import` asks for one and
+asks for it twice, which reads like a credential you were supposed to have been
+given. It is not. You invent it at that moment; it is stored hashed in a UEFI
+variable, MokManager asks for it once on the next boot to prove the same person
+is still at the keyboard, and then it is discarded. Any short string you can
+retype works. It is not the root password, not the user password, and it is not
+reused between machines.
+
+The reboot is the part that actually enrols:
+
+1. `sudo ik-os enroll-mok import` — records the request. Nothing is enrolled yet.
+2. Reboot. MokManager (a blue text screen from shim) appears before the boot menu.
+3. **Enroll MOK → Continue → Yes**, then type the password from step 1.
+4. The machine reboots and starts the signed bootloader.
+
+Miss the MokManager screen and the request stays pending — `ik-os enroll-mok
+status` reports that state explicitly, because "nothing happened yet" is
+otherwise indistinguishable from "it did not work".
+
+The fleet-wide alternative is for IT to place `/usr/share/ik-os/ik-os-mok.crt`
+in the firmware `db` during provisioning, which skips all of the above. On
+Framework hardware that is a per-machine firmware visit, so it is worth it only
+at scale.
+
+If the image has no `/usr/share/ik-os/ik-os-mok.crt`, its bootloader is
+unsigned and there is nothing to enrol — that machine needs an image built with
+the MOK secrets configured, not a firmware change.
+
 ## The VPN identity does not migrate
 
 ik-os provisions the ik-office VPN identity per device at enrolment instead of

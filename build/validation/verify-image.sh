@@ -91,6 +91,48 @@ check "kargs enable the boot splash"         bash -c 'grep -q "\"splash\"" /usr/
 check "/boot is empty"                       test -z "$(ls -A /boot)"
 check "no dangling kernel symlinks at /"     bash -c '! test -e /vmlinuz -o -L /vmlinuz -o -L /initrd.img'
 check "systemd-boot present"                 test -f /usr/lib/systemd/boot/efi/systemd-bootx64.efi
+
+# Secure Boot (SDD §5, §50, ADR 0002). The load-bearing check is the last one: a
+# build that was told signing is required must not be able to produce an image
+# that is unsigned. That combination was reachable in CI until 2026-08-31,
+# because the workflow step that sets `required` was skipped by the same missing
+# secret that made signing impossible — so the guard in 40-boot.sh never ran and
+# unsigned images published green.
+SB_ENV=/usr/share/ik-os/build-secureboot.env
+check "the Secure Boot state was recorded"   test -s "$SB_ENV"
+# shellcheck disable=SC1090
+. "$SB_ENV" 2>/dev/null || true
+# Functions, not `bash -c '[[ ... ]]'`: a sourced file sets these variables
+# without exporting them, so a child shell sees them unset and every comparison
+# quietly succeeds. The contradiction check below passed on a deliberately
+# contradictory file until it was written this way.
+sb_policy_recorded()  { [[ "${SECURE_BOOT_SIGNING:-}" == required || "${SECURE_BOOT_SIGNING:-}" == optional ]]; }
+sb_outcome_recorded() { [[ "${SECURE_BOOT_SIGNED:-}"  == yes      || "${SECURE_BOOT_SIGNED:-}"  == no       ]]; }
+sb_not_skipped()      { [[ "${SECURE_BOOT_SIGNING:-}" != required || "${SECURE_BOOT_SIGNED:-}"  == yes      ]]; }
+check "the signing policy is recorded"       sb_policy_recorded
+check "the signing outcome is recorded"      sb_outcome_recorded
+check "required signing was not skipped"     sb_not_skipped
+
+BOOTEFI=/usr/lib/systemd/boot/efi/systemd-bootx64.efi
+if [[ "${SECURE_BOOT_SIGNED:-no}" == yes ]]; then
+    # sbverify --list needs no certificate, so this asserts a signature is
+    # actually attached rather than re-checking who signed it. 40-boot.sh has
+    # already done that against the cert, which is not in the image.
+    check "systemd-boot carries a signature"  bash -c "sbverify --list '$BOOTEFI' | grep -q 'signature 1'"
+    check "the MOK certificate ships (PEM)"   test -s /usr/share/ik-os/ik-os-mok.crt
+    check "the MOK certificate ships (DER)"   test -s /usr/share/ik-os/ik-os-mok.der
+    check "the shipped MOK cert parses"       openssl x509 -in /usr/share/ik-os/ik-os-mok.crt -noout -subject
+    check "the DER copy is the same cert"     bash -c "diff <(openssl x509 -in /usr/share/ik-os/ik-os-mok.crt -outform DER) /usr/share/ik-os/ik-os-mok.der"
+    check "mokutil is available to enrol it"  command -v mokutil
+    check "shim is present for the chain"     bash -c 'compgen -G "/usr/lib/shim/shim*.efi.signed*" > /dev/null'
+else
+    # A developer build. Assert the *absence* of the enrolment material too: a
+    # stale cert from a previous layer would tell an operator to enrol a key that
+    # signed nothing in this image.
+    check "no signature on an unsigned build" bash -c "! sbverify --list '$BOOTEFI' 2>/dev/null | grep -q 'signature 1'"
+    check "no stale MOK certificate"          bash -c '! test -e /usr/share/ik-os/ik-os-mok.crt -o -e /usr/share/ik-os/ik-os-mok.der'
+    printf '  \033[33m!\033[0m %s\n' "this image has an UNSIGNED bootloader and will not Secure Boot"
+fi
 check "bootc is installed"                   command -v bootc
 # shellcheck disable=SC1091
 . /usr/share/ik-os/build-bootc.env

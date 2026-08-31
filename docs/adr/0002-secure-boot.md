@@ -36,7 +36,49 @@ build.
   developer builds only; the resulting image will not Secure Boot.
 
 The MOK is enrolled per machine, either by IT placing it in the firmware `db`
-during provisioning, or via `mokutil --import` at install time.
+during provisioning, or via `mokutil --import` at install time. The public
+certificate therefore ships in the image at `/usr/share/ik-os/ik-os-mok.crt`
+(and `.der`, because `mokutil --import` accepts only DER): a machine cannot
+enrol a key it was never given, and telling operators to fetch it out of band is
+how fleets end up with Secure Boot switched off instead. It is written only when
+the bootloader in that image was actually signed, so its presence is a fact
+about the image rather than a promise.
+
+`ik-os enroll-mok` wraps the enrolment. See `docs/migration.md` for the
+procedure and for the one thing everybody asks first: the password `mokutil`
+prompts for is invented on the spot and used once.
+
+## The guard has to be reachable
+
+`SECURE_BOOT_SIGNING=required` is only worth anything if it is set when the key
+is missing, which is exactly the case it exists for. It was not. `build.yml`'s
+staging step both set `required` **and** carried `if: … && env.MOK_KEY != ''`,
+so an absent secret skipped the step, left the committed default of `optional`
+in place, and published an image with an unsigned bootloader and a green tick.
+The condition meant to enforce signing was the condition that disabled the
+enforcement. Every image published before 2026-08-31 is unsigned for this
+reason, including the one the first green pipeline produced.
+
+Three changes so the policy cannot be silently absent again:
+
+1. The staging step always runs off a pull request and decides in the open. With
+   no key it **fails**, unless the repository variable
+   `ALLOW_UNSIGNED_BOOTLOADER=yes` is set — one deliberate, auditable way past
+   Rule 18, because a build that is silently red is no better than one that is
+   silently unsigned. Setting a repository variable is a recorded act; a skipped
+   step was not.
+2. `40-boot.sh` records the **intent** next to the outcome, and
+   `verify-image.sh` fails the build if `required` did not produce a signed
+   binary. The image can no longer disagree with the policy it was built under.
+3. `build.yml` labels the image `com.interligent.ik-os.secureboot`, and
+   `promote.yml` refuses to make an unsigned candidate `stable` unless the
+   person promoting types the acknowledgement. Reading a label costs one
+   registry request; reading the file inside the image would cost a seven-
+   gigabyte pull.
+
+The key/cert pair is also validated before the build starts — readable,
+unencrypted, and actually a pair. A mismatched pair signs happily and produces a
+binary the firmware rejects, which is otherwise discovered on the machine.
 
 ## Alternatives rejected
 
@@ -54,7 +96,14 @@ only installable through bootc's composefs backend. See
 ## Consequences
 
 - Machines need the ik-os MOK enrolled once. `ik-os-migrate check` reports
-  Secure Boot state so this surfaces before migration, not after.
+  Secure Boot state and names the command, because this is the one preflight
+  item whose consequence is a black screen *after* a successful install rather
+  than a failed install.
+- Until `SECURE_BOOT_MOK_KEY` and `SECURE_BOOT_MOK_CERT` are configured, builds
+  fail by default. That is the intended behaviour of Rule 18 and not a
+  regression; `ALLOW_UNSIGNED_BOOTLOADER=yes` is the way to keep building
+  meanwhile, at the cost of images that cannot Secure Boot and cannot be
+  promoted without an explicit acknowledgement.
 - `tests/boot/test-boot.sh` fails on a machine with Secure Boot disabled, which
   is deliberate: acceptance criterion 2 is not satisfied by a machine that
   merely *could* Secure Boot.

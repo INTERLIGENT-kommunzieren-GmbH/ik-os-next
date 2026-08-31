@@ -18,6 +18,20 @@ need_root() { [[ $EUID -eq 0 ]] || exec sudo -- "$0" "$@"; }
 # Secrets must never appear in diagnostics output (SDD §43).
 redact() { sed -E 's/(password|token|secret|key)[=:][^[:space:]]*/\1=<redacted>/Ig'; }
 
+# The company Machine Owner Key, shipped by build/scripts/40-boot.sh only when
+# the bootloader in this image was actually signed with it (ADR 0002). DER as
+# well as PEM because `mokutil --import` accepts only DER and is unhelpful about
+# being handed the other one.
+MOK_PEM=/usr/share/ik-os/ik-os-mok.crt
+MOK_DER=/usr/share/ik-os/ik-os-mok.der
+
+# `mokutil --test-key` exits non-zero both when the key is absent and when it is
+# merely not enrolled, so the wording is what gets matched rather than the status.
+mok_enrolled() {
+    [[ -r "$MOK_DER" ]] || return 1
+    mokutil --test-key "$MOK_DER" 2>/dev/null | grep -qi 'already enrolled'
+}
+
 cmd_version() {
     bold "ik-os"
     kv "Version"       "${IK_OS_VERSION:-dev}"
@@ -119,6 +133,16 @@ cmd_diagnostics() {
         bold "Secure Boot"
         kv "State" "$(mokutil --sb-state 2>/dev/null | head -1)"
         kv "Signed by ik-os" "${SECURE_BOOT_SIGNED:-unknown}"
+        kv "Signing policy" "${SECURE_BOOT_SIGNING:-unknown}"
+        # Whether the certificate is enrolled is the difference between "will
+        # boot" and "will not", so a support bundle that omits it is missing the
+        # answer to the question it was collected for.
+        if [[ -r "$MOK_PEM" ]]; then
+            kv "MOK enrolled" "$(mok_enrolled && echo yes || echo no)"
+            kv "MOK subject" "$(openssl x509 -in "$MOK_PEM" -noout -subject 2>/dev/null | sed 's/^subject=//')"
+        else
+            kv "MOK certificate" "not shipped (unsigned bootloader)"
+        fi
         echo
         cmd_hardware; echo
         bold "Docker"
@@ -290,6 +314,100 @@ cmd_ssh() {
     esac
 }
 
+cmd_enroll_mok() {
+    # SDD §5, §50, ADR 0002. Debian has no signed systemd-boot, so ik-os signs it
+    # with a company Machine Owner Key; the firmware will not run that binary
+    # until the matching certificate is enrolled on the machine. Two ways to do
+    # that: IT places the certificate in the firmware db during provisioning, or
+    # the machine enrols it through shim's MokManager, which is what this does.
+    local action="${1:-status}"
+
+    case "$action" in
+      status)
+        bold "Secure Boot"
+        kv "Firmware state"     "$(mokutil --sb-state 2>/dev/null | head -1)"
+        kv "Signing policy"     "${SECURE_BOOT_SIGNING:-unknown}"
+        kv "Bootloader signed"  "${SECURE_BOOT_SIGNED:-unknown}"
+
+        if [[ ! -r "$MOK_PEM" ]]; then
+            kv "MOK certificate" "not shipped"
+            echo
+            echo "  This image has an UNSIGNED bootloader, so there is nothing to"
+            echo "  enrol and it cannot start with Secure Boot on. That is a build"
+            echo "  configuration problem, not a machine one — see ADR 0002."
+            return 0
+        fi
+
+        kv "MOK subject"     "$(openssl x509 -in "$MOK_PEM" -noout -subject 2>/dev/null | sed 's/^subject=//')"
+        kv "MOK expires"     "$(openssl x509 -in "$MOK_PEM" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')"
+        kv "MOK SHA-256"     "$(openssl x509 -in "$MOK_PEM" -noout -fingerprint -sha256 2>/dev/null | sed 's/^.*=//')"
+
+        if mok_enrolled; then
+            kv "Enrolled" "yes"
+        else
+            kv "Enrolled" "no"
+            # A pending request is the state between `mokutil --import` and the
+            # reboot that completes it, and it is the single most confusing one
+            # to be in: nothing has changed yet and nothing will until MokManager
+            # runs.
+            if mokutil --list-new 2>/dev/null | grep -q .; then
+                echo
+                echo "  An enrolment request is PENDING. Reboot to finish it:"
+                echo "  MokManager appears before the boot menu — choose"
+                echo "  \"Enroll MOK\" > \"Continue\" > \"Yes\", then type the"
+                echo "  one-time password you set when you ran the import."
+            else
+                echo
+                echo "  Enrol it with: sudo ik-os enroll-mok import"
+            fi
+        fi
+        ;;
+
+      import)
+        need_root enroll-mok import
+        [[ -r "$MOK_DER" ]] || {
+            echo "no MOK certificate in this image, so there is nothing to enrol." >&2
+            echo "The bootloader here is unsigned (SECURE_BOOT_SIGNED=${SECURE_BOOT_SIGNED:-unknown})." >&2
+            exit 1
+        }
+        if mok_enrolled; then
+            echo "the ik-os MOK is already enrolled; nothing to do."
+            exit 0
+        fi
+
+        # The password question comes up every time, so answer it before asking.
+        cat <<'EOF'
+About to ask shim to enrol the ik-os Machine Owner Key.
+
+mokutil will ask you to invent a password and type it twice. It is NOT an ik-os
+password and there is no default: it is a one-time value that only exists to
+prove the same person is at the keyboard after the reboot. MokManager asks for
+it once, then it is discarded. Any short string you can retype is fine.
+
+What happens next:
+  1. mokutil records the request in a UEFI variable. Nothing is enrolled yet.
+  2. Reboot. MokManager appears before the boot menu.
+  3. Enroll MOK > Continue > Yes, then type the password from step 1.
+  4. The machine reboots and starts the signed systemd-boot.
+
+EOF
+        openssl x509 -in "$MOK_PEM" -noout -subject -enddate -fingerprint -sha256 \
+            | sed 's/^/  /'
+        echo
+        mokutil --import "$MOK_DER"
+        echo
+        echo "request recorded. Reboot to complete the enrolment, then check with:"
+        echo "  ik-os enroll-mok status"
+        ;;
+
+      *)
+        echo "unknown action: $action" >&2
+        echo "usage: ik-os enroll-mok [status|import]" >&2
+        exit 2
+        ;;
+    esac
+}
+
 cmd_selftest() {
     # SDD §63 — the booted-system half of the acceptance criteria. The other
     # half runs against the image at build time (build/validation).
@@ -322,6 +440,9 @@ ik-os — Interligent developer workstation
   ik-os rollback                Boot the previous deployment
   ik-os hardware                Detected hardware and firmware
   ik-os diagnostics [--bundle]  Full report; --bundle writes a support archive
+  ik-os enroll-mok [status|import]
+                                Secure Boot state, and enrol the company key
+                                so the signed bootloader will start (ADR 0002)
   ik-os selftest [suite...]     Run the booted acceptance suites (SDD §63);
                                 default: boot provisioning docker printing hardware
   ik-os ssh [status|enable|disable]
@@ -340,6 +461,7 @@ case "${1:-}" in
     hardware)    shift; cmd_hardware "$@" ;;
     diagnostics) shift; cmd_diagnostics "$@" ;;
     selftest)    shift; cmd_selftest "$@" ;;
+    enroll-mok)  shift; cmd_enroll_mok "$@" ;;
     ssh)         shift; cmd_ssh "$@" ;;
     -h|--help|help|"") usage ;;
     *) echo "unknown command: $1" >&2; usage >&2; exit 2 ;;

@@ -12,6 +12,10 @@ on:
       hardware-validation-ticket:
         description: "Ticket recording hardware validation (SDD §9)"
         required: true
+      acknowledge-unsigned-bootloader:
+        description: "Promote an image that cannot Secure Boot (SDD §5) — type: yes"
+        required: false
+        default: "no"
 
 env:
   IMAGE_NAME: ik-os-next
@@ -66,6 +70,43 @@ jobs:
           curl -sSfL -o cosign.pub https://raw.githubusercontent.com/${{ github.repository }}/main/config/company/cosign.pub
           cosign verify --key cosign.pub \
             "${IMAGE_REGISTRY}/${IMAGE_NAME}:${{ inputs.version }}"
+
+      # SDD §5, ADR 0002 — stable is what the fleet runs, so it must Secure Boot.
+      # build.yml labels every image with the state it built, and verify-image.sh
+      # fails inside that build if `required` did not produce a signed binary, so
+      # a label of "yes" on an image that exists means the bootloader is signed.
+      # Reading the label costs one registry request; reading the file inside the
+      # image would cost a seven-gigabyte pull.
+      - name: The candidate must Secure Boot (Rule 18)
+        run: |
+          REF="${IMAGE_REGISTRY}/${IMAGE_NAME}:${{ inputs.version }}"
+          sb=$(skopeo inspect "docker://${REF}" \
+                 | jq -r '.Labels["com.interligent.ik-os.secureboot"] // "unset"')
+          echo "com.interligent.ik-os.secureboot = ${sb}"
+
+          if [[ "$sb" == yes ]]; then
+            echo "the candidate has a signed bootloader"
+            exit 0
+          fi
+
+          # "unset" means the image predates the label, which in practice means it
+          # was built while the signing guard was unreachable — so it is unsigned,
+          # not unknown. It is reported separately anyway, because the two want
+          # different fixes: rebuild versus configure the MOK.
+          if [[ "$sb" == unset ]]; then
+            echo "::warning::This image carries no Secure Boot label, so it was built before the signing guard existed (before 2026-08-31) and its bootloader is unsigned."
+          fi
+
+          if [[ "${{ inputs.acknowledge-unsigned-bootloader }}" == "yes" ]]; then
+            echo "::warning title=Promoting an unsigned bootloader::Acknowledged by ${{ github.actor }}. Every machine on stable will need Secure Boot disabled, which violates SDD §50. Ticket: ${{ inputs.hardware-validation-ticket }}"
+            exit 0
+          fi
+
+          echo "::error title=Candidate cannot Secure Boot::${REF} has an unsigned bootloader (label: ${sb}). Rule 18: refusing to make it stable."
+          echo "Configure SECURE_BOOT_MOK_KEY and SECURE_BOOT_MOK_CERT, rebuild, and"
+          echo "promote the new version. To override deliberately, re-run this"
+          echo "workflow with acknowledge-unsigned-bootloader = yes."
+          exit 1
 
       - name: Keep the outgoing stable image available for rollback
         run: |

@@ -41,9 +41,20 @@ cmd_check() {
         fail "not booted in UEFI mode — ik-os does not support legacy BIOS (SDD §5)"
     fi
 
+    # ADR 0002: ik-os signs systemd-boot with a company MOK, so a machine with
+    # Secure Boot on will refuse to start ik-os until that certificate is
+    # enrolled. This is the one preflight item that produces a *black screen
+    # after* a successful install rather than a failed install, so it says what
+    # to run rather than only what is true.
     local sb; sb=$(mokutil --sb-state 2>/dev/null | head -1 || echo "unknown")
     case "$sb" in
-        *enabled*)  ok  "Secure Boot: enabled — the ik-os MOK must be enrolled during install" ;;
+        *enabled*)
+            ok "Secure Boot: enabled"
+            warn "the ik-os MOK must be enrolled or ik-os will not boot. After the"
+            warn "install, run: sudo ik-os enroll-mok import  (then reboot into"
+            warn "MokManager). Skip this only if IT has already placed the"
+            warn "certificate in the firmware db."
+            ;;
         *disabled*) warn "Secure Boot: disabled — ik-os will install, but SDD §50 expects it on" ;;
         *)          warn "Secure Boot: state unknown" ;;
     esac
