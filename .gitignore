@@ -11,3 +11,4 @@ changelog.md
 output.env
 iso/image.env
 ik-os-mok.key
+secrets/

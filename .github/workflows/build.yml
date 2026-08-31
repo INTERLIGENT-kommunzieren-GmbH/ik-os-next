@@ -180,12 +180,22 @@ jobs:
       - name: Build image
         id: build
         run: |
+          # The MOK key goes in as a build secret, not through the context: the
+          # ctx stage copies a fixed list of directories and `secrets/` is not
+          # one of them, so a key written to the workspace is not visible to
+          # 40-boot.sh at all. That is how the first signed build failed.
+          SB_ARGS=()
+          if [[ "${SECURE_BOOT_EXPECTED:-no}" == yes ]]; then
+            SB_ARGS+=(--secret "id=ik-os-mok-key,src=secrets/ik-os-mok.key")
+          fi
+
           # The label lets promote.yml check the Secure Boot state from the
           # registry metadata alone. It records this workflow's intent, not the
           # image's content — but verify-image.sh runs inside the build and fails
           # if `required` did not produce a signed binary, so a label of "yes" on
           # an image that exists means the binary is signed.
           podman build \
+            "${SB_ARGS[@]}" \
             --build-arg "IK_OS_VERSION=${{ steps.meta.outputs.version }}" \
             --build-arg "IK_OS_BUILD_ID=${GITHUB_RUN_ID}" \
             --build-arg "IK_OS_CHANNEL=${CHANNEL}" \

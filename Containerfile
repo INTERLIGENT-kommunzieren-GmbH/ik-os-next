@@ -95,8 +95,18 @@ STOPSIGNAL SIGRTMIN+3
 # No apt cache mount here on purpose: 95-finalize.sh has to empty /var, and a
 # live mount under /var/cache cannot be unlinked from inside the build. The
 # archive re-download is ~80 MB and keeps the build self-contained.
+# The MOK private key is a build secret, not part of the context: a secret mount
+# exists only for the duration of this RUN and lands in no layer. The ctx stage
+# copies a fixed list of directories, so a key written into the workspace would
+# either be invisible to the build (which is how the first signed build failed)
+# or, if the list were widened, be baked into a stage.
+#
+# The mount is optional. Pull-request and local builds pass no secret, the file
+# simply is not there, and 40-boot.sh takes its unsigned path — which is why
+# SECURE_BOOT_SIGNING has to be `required` in CI for that to be an error.
 RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=bind,from=bootc-builder,source=/output,target=/prebuilt \
+    --mount=type=secret,id=ik-os-mok-key,target=/run/secrets/ik-os-mok.key \
     --mount=type=tmpfs,dst=/tmp \
     /ctx/build/scripts/00-preflight.sh \
  && /ctx/build/scripts/10-ostree-layout.sh \

@@ -29,6 +29,15 @@ build $target_image=image_name $tag=default_tag:
     # the same day are told apart by the image digest, which `ik-os version`
     # prints and which is what actually re-triggers provisioning (ADR 0010).
     BUILD_ARGS+=("--build-arg" "IK_OS_VERSION=${tag}.$(date -u +%Y%m%d).local")
+    # A local signed build, for testing the Secure Boot path without pushing.
+    # Drop the MOK key at secrets/ik-os-mok.key (gitignored) and set
+    # SECURE_BOOT_SIGNING=required in config/boot/secure-boot.env if it should
+    # fail rather than fall back to unsigned. Without the file this is a normal
+    # unsigned developer build.
+    if [[ -r secrets/ik-os-mok.key ]]; then
+        BUILD_ARGS+=("--secret" "id=ik-os-mok-key,src=secrets/ik-os-mok.key")
+        echo "signing with secrets/ik-os-mok.key"
+    fi
     podman build "${BUILD_ARGS[@]}" --pull=newer --tag "${target_image}:${tag}" .
 
     # verify-image.sh runs inside the container and so cannot see the image's own
