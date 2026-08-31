@@ -23,12 +23,13 @@ env:
   # Virtual size of the disk image. The file is sparse, so this costs only what
   # is actually written; it is a ceiling, not an allocation.
   #
-  # 30G because the installed image is ~7 GB and first boot then pulls roughly
+  # 32G matches the Justfile's build-raw/build-qcow2 default. The installed
+  # image is ~7 GB and first boot then pulls roughly
   # 12 GB of Flatpaks and runtimes into /var/lib/flatpak — the figure
   # build/validation/check-flatpaks.sh prints on every run. A 20G disk boots and
   # then runs out of space during ik-os-firstboot, which is a far more expensive
   # failure to diagnose than an oversized sparse file.
-  DISK_SIZE: 30G
+  DISK_SIZE: 32G
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -66,9 +67,23 @@ jobs:
       # bootc installs itself. bootc-image-builder is not used: it is an
       # RPM-oriented tool and its ISO path cannot build a Debian installer
       # (docs/adr/0003-installer-iso.md).
+      #
+      # The backend and bootloader flags come from build/lib/bootc-install-flags.sh,
+      # the same file the Justfile recipe sources. This step used to hardcode the
+      # invocation without them, so it silently used bootc's default ostree
+      # backend and died on "bootupd is required for ostree-based installs" — the
+      # exact failure ADR 0005 was written to avoid. It went unnoticed because the
+      # workflow only runs after a successful "Build image", which had never
+      # happened.
       - name: Install to disk
         run: |
           mkdir -p output
+
+          # shellcheck disable=SC1091
+          REPO="$GITHUB_WORKSPACE" . build/lib/bootc-install-flags.sh
+          echo "install flags: ${INSTALL_FLAGS[*]}"
+          PODMAN="sudo podman" bootc_require_oci_manifest \
+            "${IMAGE_REGISTRY}/${IMAGE_NAME}:${CHANNEL}"
 
           # --via-loopback attaches a loop device to an EXISTING file; bootc does
           # not create one. Without this truncate the run dies on
@@ -85,7 +100,7 @@ jobs:
             -v "$PWD/output:/output" \
             "${IMAGE_REGISTRY}/${IMAGE_NAME}:${CHANNEL}" \
             bootc install to-disk --via-loopback --wipe \
-              --filesystem btrfs /output/ik-os.raw
+              --filesystem btrfs "${INSTALL_FLAGS[@]}" /output/ik-os.raw
           sudo chown "$USER:$USER" output/ik-os.raw
 
           # Apparent size is DISK_SIZE; the number that matters is what was

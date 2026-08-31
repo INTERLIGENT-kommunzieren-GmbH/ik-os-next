@@ -143,22 +143,14 @@ _install-to-disk $target_image $tag $name $size: (_rootful_load target_image tag
     rm -f "${OUT}/${name}.raw"
     truncate -s "${size}" "${OUT}/${name}.raw"
 
-    # Backend and bootloader are project decisions, not ad-hoc flags.
+    # Backend and bootloader are project decisions, not ad-hoc flags. Shared
+    # with .github/workflows/build-disk.yml so the two install paths cannot
+    # drift — which they did, until the workflow's first real run.
     # shellcheck disable=SC1091
-    set -a; . ./config/image.env; set +a
-    INSTALL_FLAGS=(--bootloader "${BOOTC_BOOTLOADER}")
-    [[ "${BOOTC_BACKEND}" == "composefs" ]] && INSTALL_FLAGS+=(--composefs-backend)
-    [[ "${BOOTC_ALLOW_MISSING_VERITY}" == "true" ]] && INSTALL_FLAGS+=(--allow-missing-verity)
+    . ./build/lib/bootc-install-flags.sh
     echo "install flags: ${INSTALL_FLAGS[*]}"
 
-    if [[ "${BOOTC_BACKEND}" == "composefs" ]]; then
-        mt=$(sudo podman image inspect --format '{{ '{{.ManifestType}}' }}' \
-            "${target_image}:${tag}")
-        [[ "$mt" == application/vnd.oci.image.manifest.v1+json ]] || {
-            echo "error: ${target_image}:${tag} is '${mt}'." >&2
-            echo "       The composefs backend only supports OCI images." >&2
-            exit 1; }
-    fi
+    PODMAN="sudo podman" bootc_require_oci_manifest "${target_image}:${tag}"
 
     sudo podman run --rm --privileged --pid=host \
         --security-opt label=type:unconfined_t \
