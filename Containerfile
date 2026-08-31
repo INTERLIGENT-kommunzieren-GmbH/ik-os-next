@@ -132,7 +132,12 @@ COPY --from=flatpak-preinstall /var/lib/flatpak /var/lib/flatpak
 # with a per-machine name.
 COPY config/hostname /etc/hostname
 
+# org.opencontainers.image.source is what links a GHCR package to a repository,
+# and is how the package page gets a "Repository" link and its README. The
+# original ik-os image set it; this one did not, which is worth fixing whether or
+# not it contributes to the write_package denial (ADR 0015).
 LABEL containers.bootc="1" \
+      org.opencontainers.image.source="https://github.com/INTERLIGENT-kommunzieren-GmbH/ik-os-next" \
       ostree.bootable="1" \
       org.opencontainers.image.title="ik-os" \
       org.opencontainers.image.description="Interligent immutable Debian developer workstation" \

@@ -30,6 +30,41 @@ Deployments should pin by digest where possible (SDD §7).
 - `packages.manifest` — every package and version
 - `ik-os.spdx.json` — SBOM, attested to the image with cosign
 
+## Publishing credentials
+
+`GITHUB_TOKEN` cannot publish to this organisation's container registry. It is
+denied `write_package` for **any** package name — the same error appears for a
+package that does not exist yet — while both this repository and the original one
+declare `packages: write`, are public, and report
+`default_workflow_permissions=write`. The organisation-level policy behind it
+needs `admin:org` to read.
+
+So registry authentication uses a **classic personal access token with
+`write:packages`**, stored as the repository secret `GHCR_TOKEN`:
+
+    gh secret set GHCR_TOKEN -R INTERLIGENT-kommunzieren-GmbH/ik-os-next
+
+Classic, not fine-grained: fine-grained tokens have not historically carried a
+Container-registry permission. If the token creation page offers one, prefer it —
+it can be scoped to this organisation alone.
+
+Used by `build.yml` (push) and `promote.yml` (retagging). Both fail with an
+explicit message when the secret is missing rather than attempting the push, and
+both authenticate with `--password-stdin` so the credential never appears in the
+process list of a machine running other people's code. Everything else still uses
+`GITHUB_TOKEN`.
+
+This is a worse credential than `GITHUB_TOKEN` and should be treated as one: it
+is long-lived, tied to a person rather than to the repository, and carries the
+same rights across every organisation that person can publish to. Give it an
+expiry and diarise the rotation. Removing the org restriction and reverting to
+`GITHUB_TOKEN` is the better end state.
+
+**After the first successful push, set the package's visibility to public.** A
+new GHCR package is private even when the repository is public, and a private
+package cannot be pulled by `build-disk.yml`, by `build-iso.yml`, or by any
+machine following a channel — none of which authenticate.
+
 ## Image signing and key rotation (SDD §45)
 
 Every image pushed from `main` is signed with the key in the `SIGNING_SECRET`

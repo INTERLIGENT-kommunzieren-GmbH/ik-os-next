@@ -30,10 +30,19 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Promotion retags inside the registry, which is a write: same PAT as
+      # build.yml, for the same reason (docs/releases.md).
       - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         run: |
           echo "IMAGE_REGISTRY=${IMAGE_REGISTRY,,}" >> "$GITHUB_ENV"
-          skopeo login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
+          if [[ -z "$GHCR_TOKEN" ]]; then
+            echo "::error::GHCR_TOKEN is not set — promotion cannot write tags."
+            exit 1
+          fi
+          printf '%s' "$GHCR_TOKEN" \
+            | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Verify the candidate is signed (SDD §45)
         run: |
