@@ -41,17 +41,24 @@ fit one rule:
 | this repo → `ik-os` (exists, linked elsewhere) | denied |
 | this repo → `ik-os-next` (does not exist yet)  | denied |
 
-The organisation appears to forbid **creating** a package, not writing to one
-that already exists — the *Packages → Package creation* setting rather than
-Actions workflow permissions. Both repositories declare `packages: write`, are
-public, use `github.actor` + `GITHUB_TOKEN`, and report
-`default_workflow_permissions=write`; the org policy itself needs `admin:org` to
-read, so this is the best available explanation rather than a confirmed one. The
-original package carries only 2025-09-26 tags, so there is no evidence of a push
-to an existing package *after* whatever tightened.
+**The cause is not established.** What is known: both repositories declare
+`packages: write`, are public, authenticate as `github.actor` with
+`GITHUB_TOKEN`, and report `default_workflow_permissions=write`; the original
+repository's workflow uses different tooling (`docker/login-action`,
+`redhat-actions/push-to-registry`) but the same credential, so tooling is not the
+variable. Every organisation-level settings endpoint that would answer this
+returns 403 without `admin:org`, and GHCR write access depends on package
+settings and visibility that are equally unreadable at that scope.
 
-If that rule holds, a **classic personal access token with `write:packages`**
-stored as `GHCR_TOKEN` is a one-time bootstrap, not a fixture:
+Two explanations were proposed and neither is confirmed: that GHCR binds the
+`ik-os` package to the repository that created it (disproved — a package name
+that did not exist failed identically), and that the organisation forbids package
+creation (disputed, since the organisation does publish packages today).
+
+Settling it needs either `admin:org` read access or the empirical result below.
+
+Meanwhile a **classic personal access token with `write:packages`** stored as
+`GHCR_TOKEN` gets the first image published:
 
     gh secret set GHCR_TOKEN -R INTERLIGENT-kommunzieren-GmbH/ik-os-next
 
@@ -59,11 +66,12 @@ Classic, not fine-grained: fine-grained tokens have not historically carried a
 Container-registry permission. If the token creation page offers one, prefer it —
 it can be scoped to this organisation alone.
 
-The first push creates the package, and the `org.opencontainers.image.source`
-label in the `Containerfile` links it to this repository, so it inherits this
-repository's access. `GITHUB_TOKEN` should then be able to write to it.
+Whether it stays needed is an experiment, not a prediction. The first push
+creates the package; the `org.opencontainers.image.source` label in the
+`Containerfile` links it to this repository, and a linked package can inherit the
+repository's access. Whether it does here is exactly the unknown above.
 
-**Testing that needs no code change: delete the secret.** `build.yml` and
+**The experiment needs no code change: delete the secret.** `build.yml` and
 `promote.yml` prefer `GHCR_TOKEN` and fall back to `GITHUB_TOKEN`, logging which
 one they used. If the fallback works, the PAT was scaffolding and should be
 revoked. If it does not, the push fails at the next step and the log says which
