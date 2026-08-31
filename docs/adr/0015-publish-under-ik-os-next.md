@@ -84,8 +84,14 @@ does, that is a fleet-wide cutover: the old repository's workflows must be
 disabled first, or a Fedora-based build can publish to that name again long after
 anyone expects it to.
 
-The original `ik-os` package keeps its own signing key, which no longer exists
-outside its repository secret (ADR 0014). Publishing a fix for machines still on
-that image is therefore not possible without rotating a key those machines
-cannot be told about — an argument for completing the migration rather than
-maintaining both.
+The original `ik-os` package keeps its own signing key. This ADR previously said
+that key existed nowhere outside its repository secret, so no fix could be
+published for machines still running that image. **The key was subsequently
+recovered** — it verifies `ik-os:stable` and matches the public key that image
+embeds — so a signed update for the existing fleet is possible after all, and the
+migration no longer has to be a hard cutover for want of a signature.
+
+It remains an argument for completing the migration rather than maintaining both.
+The legacy key has now been handled outside a secret store, and it carries an
+empty password, so the PEM is the whole secret; the fleet's trust anchor is
+weaker than the new image's for as long as the old image is in service.

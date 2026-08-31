@@ -153,8 +153,25 @@ completed push.
 **The private key cannot be read back out of GitHub.** Repository secrets are
 write-only: not by the API, not by a workflow log, not by the owner. If the only
 copy was the one uploaded at `gh secret set` time, it is gone, and the only
-remedy is rotation. This has already happened once — the key the original ik-os
-repository signs with exists nowhere outside its own secret store.
+remedy is rotation.
+
+The ik-os-next key was rotated on that assumption (ADR 0014) after a search
+turned up nothing. **The original ik-os key was later recovered** and is now at
+`~/Documents/IK/zert/ik-os-legacy-cosign.key`, verified against
+`ghcr.io/interligent-kommunzieren-gmbh/ik-os:stable` and against the public key
+that image carries at `/etc/pki/containers/`. Two consequences:
+
+1. A signed update **can** be published for machines still on the old image,
+   which matters during a migration that is a reinstall rather than a
+   `bootc switch`. The ADR 0015 consequence saying otherwise was wrong.
+2. Recovering it does not un-rotate anything. ik-os-next keeps its own key, which
+   is correct independently: the legacy key has since been handled outside a
+   secret store, and reusing an exposed key for the new image would be strictly
+   worse than the fresh one it already has.
+
+Both keys use an **empty password** — the CI convention, since no workflow can
+type one. The PEM is therefore the entire secret; `scrypt` in the header protects
+nothing. Treat the file exactly as you would an unencrypted key.
 
 To rotate:
 
