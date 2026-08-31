@@ -73,9 +73,14 @@ touching the disk. `ik-os-migrate rollback` queues the previous deployment if
 one still exists; if it does not, the tool prints the recovery path. `/home` is
 not modified by the migration in either case.
 
-## Before you migrate the fleet
+## The VPN identity does not migrate
 
-Rotate the ik-office VPN credentials first — see
-`config/company/vpn/README.md`. The previous Bluefin image published the client
-private key inside the container image; ik-os deliberately does not carry it,
-but the exposure already happened and only a reissue fixes it.
+ik-os provisions the ik-office VPN identity per device at enrolment instead of
+baking it into the image, so a migrated machine gets its bundle from
+`ik-os-provision-vpn` rather than inheriting the one it was running. Set
+`VPN_PROVISION_MODE` in `policy.env` before migrating a machine that needs the
+VPN, or it comes up with the profile present and flagged unprovisioned.
+
+This is not a rotation, and none is planned — the previously published key and
+`tls-crypt` material stay in service. See `config/company/vpn/README.md` for why
+that is defensible and what it costs.

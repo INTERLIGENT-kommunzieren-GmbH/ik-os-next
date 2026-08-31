@@ -82,7 +82,12 @@ Track the milestones in [SDD §62](docs/SDD.md) and the hardware matrix in
 ## Security note
 
 The previous Bluefin-based image shipped the ik-office OpenVPN client key and
-`tls-crypt` pre-shared key inside the published container image. ik-os does not
-carry them — the VPN identity is provisioned per device at enrolment — but the
-old material must be treated as compromised and reissued. See
-[`config/company/vpn/README.md`](config/company/vpn/README.md).
+`tls-crypt` pre-shared key inside the published container image, and they are
+also committed to that public repository. ik-os does not carry them — the VPN
+identity is provisioned per device at enrolment.
+
+The exposed material is **not** being reissued, deliberately: the VPN is
+`password-tls`, so the certificate is only one of two factors and the password
+is neither stored nor published. What is lost is `tls-crypt`'s job of hiding the
+endpoint from unauthenticated traffic. The reasoning and the residual risk are
+in [`config/company/vpn/README.md`](config/company/vpn/README.md).
