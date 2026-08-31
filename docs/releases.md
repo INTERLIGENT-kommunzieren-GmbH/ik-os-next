@@ -106,6 +106,27 @@ they match in the first seconds of the job rather than after the build:
 
     cosign public-key --key env://COSIGN_PRIVATE_KEY  ==  config/company/cosign.pub
 
+### rekor.sigstore.dev is in the critical path of every build
+
+A build failed on 2026-08-31 *after* a successful push and a successful
+signature, at the SBOM attestation:
+
+    POST https://rekor.sigstore.dev/api/v1/log/entries giving up after 4 attempt(s)
+
+cosign retries each HTTP request four times; it does not survive the public
+transparency log being briefly unavailable. Both cosign steps are now wrapped in
+three attempts with increasing backoff, so a blip costs a minute instead of a
+24-minute build.
+
+Worth knowing what the tlog is and is not doing here. The machine-side policy is
+`sigstoreSigned` with `keyPath` (`config/company/policy.json`) and never contacts
+rekor — an image verifies against the embedded public key alone. The transparency
+log buys *detectability of key misuse*, not verifiability. If its availability
+ever becomes intolerable, `cosign sign --tlog-upload=false` plus
+`--insecure-ignore-tlog` on the promote-side verify removes the dependency
+without weakening what the fleet actually checks. That is a deliberate trade, so
+it is written down rather than done.
+
 ### One credential file, two tools that disagree about where it is
 
 `podman push` can succeed and `cosign sign` fail with `UNAUTHORIZED:

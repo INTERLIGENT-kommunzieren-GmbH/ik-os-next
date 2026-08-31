@@ -229,19 +229,43 @@ jobs:
       # SDD §45 — production images are signed, and signing uses a CI-held key,
       # never a developer workstation. cosign is installed at the top of the job,
       # where the key is checked against the one the image embeds.
+      # Retried around the whole cosign invocation, not just its HTTP calls.
+      # cosign already retries a request four times; what it does not survive is
+      # rekor.sigstore.dev being briefly unavailable, which failed a build here
+      # on 2026-08-31 after a successful push:
+      #
+      #   POST https://rekor.sigstore.dev/api/v1/log/entries giving up after 4 attempt(s)
+      #
+      # The public transparency log is a free service in the critical path of
+      # every build. Rule 18 is still honoured — this fails if rekor is really
+      # down, it just does not discard 24 minutes of work over a blip. Note the
+      # machine-side policy (sigstoreSigned + keyPath) never consults rekor, so
+      # the tlog buys detectability of key misuse, not verifiability.
       - name: Sign the image by digest
         if: github.event_name != 'pull_request'
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
         run: |
-          cosign sign -y --key env://COSIGN_PRIVATE_KEY \
-            "${IMAGE_REGISTRY}/${IMAGE_NAME}@${{ steps.push.outputs.digest }}"
+          for attempt in 1 2 3; do
+            cosign sign -y --key env://COSIGN_PRIVATE_KEY \
+              "${IMAGE_REGISTRY}/${IMAGE_NAME}@${{ steps.push.outputs.digest }}" && exit 0
+            echo "::warning::cosign sign failed (attempt ${attempt}/3), retrying"
+            sleep $(( attempt * 20 ))
+          done
+          echo "::error::cosign sign failed three times — refusing to ship an unsigned image (Rule 18)"
+          exit 1
 
       - name: Attach the SBOM to the image
         if: github.event_name != 'pull_request'
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
         run: |
-          cosign attest -y --predicate ik-os.spdx.json --type spdxjson \
-            --key env://COSIGN_PRIVATE_KEY \
-            "${IMAGE_REGISTRY}/${IMAGE_NAME}@${{ steps.push.outputs.digest }}"
+          for attempt in 1 2 3; do
+            cosign attest -y --predicate ik-os.spdx.json --type spdxjson \
+              --key env://COSIGN_PRIVATE_KEY \
+              "${IMAGE_REGISTRY}/${IMAGE_NAME}@${{ steps.push.outputs.digest }}" && exit 0
+            echo "::warning::cosign attest failed (attempt ${attempt}/3), retrying"
+            sleep $(( attempt * 20 ))
+          done
+          echo "::error::cosign attest failed three times — the image is signed but has no SBOM attestation"
+          exit 1
