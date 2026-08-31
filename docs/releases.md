@@ -32,61 +32,61 @@ Deployments should pin by digest where possible (SDD §7).
 
 ## Publishing credentials
 
-`GITHUB_TOKEN` was denied `write_package` on the first push. Three observations
-fit one rule:
+`GITHUB_TOKEN` was denied `write_package` on the first pushes, to both `ik-os`
+and `ik-os-next`. The cause is a per-package access list, and it is visible on
+one screen — *Packages → the package → Package settings*:
 
-| push                                          | result |
-| --------------------------------------------- | ------ |
-| original repo → its own `ik-os` package        | works  |
-| this repo → `ik-os` (exists, linked elsewhere) | denied |
-| this repo → `ik-os-next` (does not exist yet)  | denied |
+| | `ik-os` | `ik-os-next`, before the fix |
+| ----------------------- | ---------------------------- | ------- |
+| Repository source       | `…/ik-os`, via the OCI label | none    |
+| Manage Actions access   | `ik-os`, role Admin          | *empty* |
+| Visibility              | public                       | public  |
 
-**The cause is not established.** What is known: both repositories declare
-`packages: write`, are public, authenticate as `github.actor` with
-`GITHUB_TOKEN`, and report `default_workflow_permissions=write`; the original
-repository's workflow uses different tooling (`docker/login-action`,
-`redhat-actions/push-to-registry`) but the same credential, so tooling is not the
-variable. Every organisation-level settings endpoint that would answer this
-returns 403 without `admin:org`, and GHCR write access depends on package
-settings and visibility that are equally unreadable at that scope.
+A repository's `GITHUB_TOKEN` may write a container package in exactly three
+cases: the push **creates** the package, the package names that repository as its
+**source** (the `org.opencontainers.image.source` label), or the repository is
+listed under **Manage Actions access**. `ik-os-next` matched none of them, so
+`packages: write` in the workflow was necessary and not sufficient — the
+repository had the permission, the package did not grant it.
 
-Two explanations were proposed and neither is confirmed: that GHCR binds the
-`ik-os` package to the repository that created it (disproved — a package name
-that did not exist failed identically), and that the organisation forbids package
-creation (disputed, since the organisation does publish packages today).
+The trap was that `ik-os-next` is **not a free name**. It already existed as an
+orphaned package from the Fedora-44 daily lineage (`stable-daily-44.*`, last
+published 2026-08-02, 209 downloads), created without the source label and so
+linked to nothing. Renaming from `ik-os` therefore moved the push from one
+package with no grant to another, which is why the rename looked like it
+disproved the diagnosis. Check `/orgs/<org>/packages` before assuming a name is
+new.
 
-Settling it needs either `admin:org` read access or the empirical result below.
+Two explanations were wrong and are recorded because both were stated with more
+confidence than the evidence carried: that the *repository* owns the package name
+(no — a package is a separate object with its own ACL), and that visibility
+governs write (no — `ik-os-next` was already public and still refused).
 
-Meanwhile a **classic personal access token with `write:packages`** stored as
-`GHCR_TOKEN` gets the first image published:
+**The fix, applied 2026-08-31:** on the `ik-os-next` package, *Manage Actions
+access → Add Repository → `ik-os-next`*, then raise the role from the default
+**Read** to **Admin**. Read is what the picker grants and it cannot push. Admin
+rather than Write so the same credential can prune old versions; Write alone
+covers upload and download. This mirrors `ik-os` exactly.
 
-    gh secret set GHCR_TOKEN -R INTERLIGENT-kommunzieren-GmbH/ik-os-next
+No PAT is required. `build.yml` and `promote.yml` prefer a `GHCR_TOKEN` secret
+and fall back to `GITHUB_TOKEN`, logging which one they used — so if the ACL is
+ever lost the failure names the credential that was tried. Leave `GHCR_TOKEN`
+unset: a classic PAT is long-lived, tied to a person rather than the repository,
+and carries the same rights across every organisation that person can publish
+to. The two-field ACL entry above does the same job with none of that.
 
-Classic, not fine-grained: fine-grained tokens have not historically carried a
-Container-registry permission. If the token creation page offers one, prefer it —
-it can be scoped to this organisation alone.
+Reusing the orphan is safe only because the tag namespaces do not overlap: the
+Fedora lineage tagged `stable-daily`, `stable-daily-<date>` and `44.<date>`,
+while this build pushes `<channel>` and `<channel>.<date>.<run>`. No push
+overwrites a tag anything could still be following — the same property ADR 0015
+protects for `ik-os`. The old versions can be pruned once nothing pulls them;
+the Admin role granted above is what permits that.
 
-Whether it stays needed is an experiment, not a prediction. The first push
-creates the package; the `org.opencontainers.image.source` label in the
-`Containerfile` links it to this repository, and a linked package can inherit the
-repository's access. Whether it does here is exactly the unknown above.
-
-**The experiment needs no code change: delete the secret.** `build.yml` and
-`promote.yml` prefer `GHCR_TOKEN` and fall back to `GITHUB_TOKEN`, logging which
-one they used. If the fallback works, the PAT was scaffolding and should be
-revoked. If it does not, the push fails at the next step and the log says which
-credential was tried.
-
-Treat the PAT as the worse credential while it exists: long-lived, tied to a
-person rather than to the repository, and carrying the same rights across every
-organisation that person can publish to. Give it an expiry. Both workflows
-authenticate with `--password-stdin`, so it never appears in the process list of
-a machine running other people's code.
-
-**After the first successful push, set the package's visibility to public.** A
-new GHCR package is private even when the repository is public, and a private
-package cannot be pulled by `build-disk.yml`, by `build-iso.yml`, or by any
-machine following a channel — none of which authenticate.
+Visibility needs no action either — the package is already public, which
+`build-disk.yml`, `build-iso.yml` and every machine following a channel depend
+on, none of them authenticating. Confirm it stays public after the first push;
+a *newly created* GHCR package would default to private even from a public
+repository.
 
 ## Image signing and key rotation (SDD §45)
 

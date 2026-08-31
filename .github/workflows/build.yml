@@ -163,19 +163,16 @@ jobs:
             packages.manifest
             ik-os.spdx.json
 
-      # Prefers GHCR_TOKEN (a PAT) and falls back to GITHUB_TOKEN, because the
-      # PAT is expected to be a one-time bootstrap rather than a fixture.
+      # GITHUB_TOKEN is the intended credential. It was refused at first because
+      # the ik-os-next package already existed — an orphan from the Fedora-44
+      # daily lineage — and a package that a push does not create grants nothing
+      # implicitly. The fix was on the package, not here: Manage Actions access
+      # now lists this repository with the Admin role (docs/releases.md).
       #
-      # This organisation appears to forbid *creating* a package, not writing to
-      # one that exists: the original repository publishes to its own package
-      # with GITHUB_TOKEN, while this one is denied both a new name and that
-      # existing name. Once the first push has created ik-os-next — and the
-      # image.source label has linked it to this repository, so it inherits this
-      # repository's access — GITHUB_TOKEN should be able to write to it.
-      #
-      # Deleting the secret is therefore the test, and needs no code change. The
-      # credential actually used is logged, so a surprise is visible; a push that
-      # is still refused fails loudly at the next step either way.
+      # GHCR_TOKEN (a PAT) is still preferred when set, so a lost grant can be
+      # worked around without editing a workflow. Leave it unset. The credential
+      # actually used is logged, so if the ACL ever disappears the failure names
+      # what was tried instead of looking like a workflow regression.
       #
       # --password-stdin, not -p: the latter puts the credential in the process
       # list of a machine running other people's code.

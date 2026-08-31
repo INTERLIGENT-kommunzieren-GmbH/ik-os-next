@@ -30,9 +30,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Same credential choice as build.yml, and the same reasoning: promotion
-      # retags an image that already exists, which is the case GITHUB_TOKEN is
-      # expected to be allowed to do.
+      # Same credential choice as build.yml. GITHUB_TOKEN suffices because the
+      # package grants this repository Actions access (docs/releases.md);
+      # GHCR_TOKEN stays supported so a lost grant can be worked around without
+      # editing a workflow, and the log says which one ran.
       - name: Log in to GHCR
         env:
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}

@@ -9,26 +9,25 @@ The first push to `main` failed at the registry:
 
     denied: permission_denied: write_package
 
-The initial reading of that error was that
-`ghcr.io/interligent-kommunzieren-gmbh/ik-os` already exists — published by the
-**original** repository, whose `IMAGE_NAME` is
-`${{ github.event.repository.name }}` — and that GHCR binds a package to the
-repository that created it, so this repository could not write to it.
+The cause turned out to be a per-package access list, not a name collision and
+not an organisation policy: a GHCR package is an object with its own ACL, and
+this repository appeared in neither `ik-os`'s nor `ik-os-next`'s. Both packages
+already existed — `ik-os-next` as an orphan from the Fedora-44 daily lineage —
+so neither push created one, and creation is the only case where the ACL is
+granted implicitly. `docs/releases.md` records the settings and the fix.
 
-**That reading was wrong**, and it is recorded here because the conclusion
-survives it and the reasoning must not be mistaken for the diagnosis. Renaming
-the image produced exactly the same error on `ik-os-next`, a package that did
-not yet exist:
+Two earlier readings of the error are recorded because the reasoning must not be
+mistaken for the diagnosis. The first was that GHCR binds a package to the
+repository that created it, so this repository could not write to `ik-os`; that
+was treated as disproved when the renamed push failed identically, but the
+rename was not a valid test — `ik-os-next` was already taken, so the experiment
+changed nothing it was meant to change. The second was that the organisation
+forbids publishing packages, which never fit the fact that the organisation
+publishes three.
 
-    /v2/interligent-kommunzieren-gmbh/ik-os-next/blobs/uploads/ … denied: permission_denied: write_package
-
-So the denial is not about the old package. It is an organisation-level
-restriction on publishing packages, and it applies to every name. That is
-tracked separately; it is not what this ADR decides.
-
-What this ADR decides is the name, and the reason for it has nothing to do with
-permissions. Sharing a name with the deployed image would have been wrong even
-if the push had succeeded on the first attempt.
+The conclusion survives both, because **this ADR decides the name and the reason
+for it has nothing to do with permissions.** Sharing a name with the deployed
+image would have been wrong even if the first push had succeeded.
 
 One package name is one tag namespace. The moment this project published
 `stable`, it would replace the tag that every deployed machine follows for
@@ -67,9 +66,9 @@ the check itself would fail rather than pass vacuously.
 
 ## Consequences
 
-Publishing is still blocked, by the organisation policy above. That is a
-credential and settings problem with its own fix, and this rename neither causes
-nor cures it.
+Publishing works once the package grants this repository Actions access, which
+is a settings change rather than a code one; this rename neither caused nor
+cured the denial.
 
 The deployed fleet is untouched. Nothing this repository builds can overwrite a
 tag the running image follows, whichever channel is published, and that property
