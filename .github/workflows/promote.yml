@@ -30,18 +30,23 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Promotion retags inside the registry, which is a write: same PAT as
-      # build.yml, for the same reason (docs/releases.md).
+      # Same credential choice as build.yml, and the same reasoning: promotion
+      # retags an image that already exists, which is the case GITHUB_TOKEN is
+      # expected to be allowed to do.
       - name: Log in to GHCR
         env:
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "IMAGE_REGISTRY=${IMAGE_REGISTRY,,}" >> "$GITHUB_ENV"
-          if [[ -z "$GHCR_TOKEN" ]]; then
-            echo "::error::GHCR_TOKEN is not set — promotion cannot write tags."
-            exit 1
+          if [[ -n "$GHCR_TOKEN" ]]; then
+            echo "authenticating with GHCR_TOKEN (PAT)"
+            token="$GHCR_TOKEN"
+          else
+            echo "authenticating with GITHUB_TOKEN (no PAT configured)"
+            token="$GITHUB_TOKEN"
           fi
-          printf '%s' "$GHCR_TOKEN" \
+          printf '%s' "$token" \
             | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Verify the candidate is signed (SDD §45)

@@ -32,15 +32,26 @@ Deployments should pin by digest where possible (SDD §7).
 
 ## Publishing credentials
 
-`GITHUB_TOKEN` cannot publish to this organisation's container registry. It is
-denied `write_package` for **any** package name — the same error appears for a
-package that does not exist yet — while both this repository and the original one
-declare `packages: write`, are public, and report
-`default_workflow_permissions=write`. The organisation-level policy behind it
-needs `admin:org` to read.
+`GITHUB_TOKEN` was denied `write_package` on the first push. Three observations
+fit one rule:
 
-So registry authentication uses a **classic personal access token with
-`write:packages`**, stored as the repository secret `GHCR_TOKEN`:
+| push                                          | result |
+| --------------------------------------------- | ------ |
+| original repo → its own `ik-os` package        | works  |
+| this repo → `ik-os` (exists, linked elsewhere) | denied |
+| this repo → `ik-os-next` (does not exist yet)  | denied |
+
+The organisation appears to forbid **creating** a package, not writing to one
+that already exists — the *Packages → Package creation* setting rather than
+Actions workflow permissions. Both repositories declare `packages: write`, are
+public, use `github.actor` + `GITHUB_TOKEN`, and report
+`default_workflow_permissions=write`; the org policy itself needs `admin:org` to
+read, so this is the best available explanation rather than a confirmed one. The
+original package carries only 2025-09-26 tags, so there is no evidence of a push
+to an existing package *after* whatever tightened.
+
+If that rule holds, a **classic personal access token with `write:packages`**
+stored as `GHCR_TOKEN` is a one-time bootstrap, not a fixture:
 
     gh secret set GHCR_TOKEN -R INTERLIGENT-kommunzieren-GmbH/ik-os-next
 
@@ -48,17 +59,21 @@ Classic, not fine-grained: fine-grained tokens have not historically carried a
 Container-registry permission. If the token creation page offers one, prefer it —
 it can be scoped to this organisation alone.
 
-Used by `build.yml` (push) and `promote.yml` (retagging). Both fail with an
-explicit message when the secret is missing rather than attempting the push, and
-both authenticate with `--password-stdin` so the credential never appears in the
-process list of a machine running other people's code. Everything else still uses
-`GITHUB_TOKEN`.
+The first push creates the package, and the `org.opencontainers.image.source`
+label in the `Containerfile` links it to this repository, so it inherits this
+repository's access. `GITHUB_TOKEN` should then be able to write to it.
 
-This is a worse credential than `GITHUB_TOKEN` and should be treated as one: it
-is long-lived, tied to a person rather than to the repository, and carries the
-same rights across every organisation that person can publish to. Give it an
-expiry and diarise the rotation. Removing the org restriction and reverting to
-`GITHUB_TOKEN` is the better end state.
+**Testing that needs no code change: delete the secret.** `build.yml` and
+`promote.yml` prefer `GHCR_TOKEN` and fall back to `GITHUB_TOKEN`, logging which
+one they used. If the fallback works, the PAT was scaffolding and should be
+revoked. If it does not, the push fails at the next step and the log says which
+credential was tried.
+
+Treat the PAT as the worse credential while it exists: long-lived, tied to a
+person rather than to the repository, and carrying the same rights across every
+organisation that person can publish to. Give it an expiry. Both workflows
+authenticate with `--password-stdin`, so it never appears in the process list of
+a machine running other people's code.
 
 **After the first successful push, set the package's visibility to public.** A
 new GHCR package is private even when the repository is public, and a private

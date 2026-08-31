@@ -163,25 +163,36 @@ jobs:
             packages.manifest
             ik-os.spdx.json
 
-      # GITHUB_TOKEN cannot publish here. This organisation denies it
-      # `write_package` for any package name, new or existing, so a PAT with
-      # write:packages does the registry authentication instead — see
-      # docs/releases.md. GITHUB_TOKEN is still what everything else uses.
+      # Prefers GHCR_TOKEN (a PAT) and falls back to GITHUB_TOKEN, because the
+      # PAT is expected to be a one-time bootstrap rather than a fixture.
       #
-      # --password-stdin, not -p: the latter puts the credential in the
-      # process list of a machine running other people's code.
+      # This organisation appears to forbid *creating* a package, not writing to
+      # one that exists: the original repository publishes to its own package
+      # with GITHUB_TOKEN, while this one is denied both a new name and that
+      # existing name. Once the first push has created ik-os-next — and the
+      # image.source label has linked it to this repository, so it inherits this
+      # repository's access — GITHUB_TOKEN should be able to write to it.
+      #
+      # Deleting the secret is therefore the test, and needs no code change. The
+      # credential actually used is logged, so a surprise is visible; a push that
+      # is still refused fails loudly at the next step either way.
+      #
+      # --password-stdin, not -p: the latter puts the credential in the process
+      # list of a machine running other people's code.
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
         env:
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [[ -z "$GHCR_TOKEN" ]]; then
-            echo "::error::GHCR_TOKEN is not set. This organisation refuses"
-            echo "GITHUB_TOKEN package writes, so the push needs a classic PAT"
-            echo "with write:packages stored as GHCR_TOKEN. See docs/releases.md."
-            exit 1
+          if [[ -n "$GHCR_TOKEN" ]]; then
+            echo "authenticating with GHCR_TOKEN (PAT)"
+            token="$GHCR_TOKEN"
+          else
+            echo "authenticating with GITHUB_TOKEN (no PAT configured)"
+            token="$GITHUB_TOKEN"
           fi
-          printf '%s' "$GHCR_TOKEN" \
+          printf '%s' "$token" \
             | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Push
