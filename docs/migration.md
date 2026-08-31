@@ -3,6 +3,37 @@
 Bluefin is Fedora-based and ik-os is Debian-based, so this is a distribution
 migration, not `bootc switch` (SDD §28).
 
+## Why not `bootc switch`
+
+Asked and answered on 2026-08-31, because the question comes back whenever the
+reinstall looks expensive. Three blockers, each sufficient alone:
+
+**The Secure Boot trust chain changes.** Bluefin boots a Microsoft-signed shim
+which validates Fedora-signed grub. This image ships **systemd-boot signed with
+the company Machine Owner Key** (`build/scripts/40-boot.sh`), and its kernel is
+signed the same way. Moving a machine onto that chain means enrolling a MOK in
+firmware — an action no in-place image update can perform, because it is not a
+filesystem operation.
+
+**SELinux gives way to AppArmor.** Fedora deployments are SELinux-labelled and
+policy-enforcing. This image ships `apparmor` and `apparmor-profiles`
+(`packages/base/packages.list`) and no SELinux policy at all. A switched machine
+would carry Fedora's labels and `/etc/selinux` with nothing to interpret them.
+
+**The `/etc` three-way merge runs across two distributions.** `bootc` merges the
+machine's `/etc` onto the new image's. Fedora's `passwd`/`shadow`/`group` carry
+different system UIDs, and its PAM stack, `nsswitch.conf` and unit names differ
+from Debian's. The merge would succeed and produce a system nobody designed.
+
+**The signing key is not one of the blockers**, though it was once written down
+as if it were. The old image installs a public key to `/etc/pki/containers/` and
+never writes a policy that references it — no `policy.json`, no `sigstoreSigned`,
+no `keyPath` anywhere in that repository — so the deployed fleet does not verify
+image signatures, and a signature could never have blocked a switch. This matters
+because it removes the only argument for signing ik-os-next with the fleet's old
+key: `ik-os-next` keeps its own rotated key, which is the stronger credential
+(`docs/releases.md`).
+
     ik-os-migrate check                # non-destructive; reports readiness
     ik-os-migrate backup               # records what will be restored
     ik-os-migrate install --dry-run    # shows the plan, changes nothing
