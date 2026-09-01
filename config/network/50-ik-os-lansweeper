@@ -1,0 +1,16 @@
+#!/bin/bash
+# ADR 0017 — kick Lansweeper reporting when the network or a VPN comes up.
+#
+# The scanning server is VPN-only, so the moment worth reacting to is a tunnel
+# appearing. NetworkManager runs dispatcher scripts SERIALLY with a 90s budget
+# per event, so this hook must return immediately: all it does is start a unit
+# with --no-block. The probe, the timeout and the decision live in
+# ik-os-lansweeper-report.service.
+#
+# $1 = interface, $2 = action.
+case "${2:-}" in
+    up|vpn-up) ;;
+    *) exit 0 ;;
+esac
+
+exec systemctl start --no-block ik-os-lansweeper-report.service

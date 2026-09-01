@@ -338,6 +338,51 @@ matches, and the check fails while the thing it checks is perfectly fine. Use
 **`podman build` warns that `SHELL` is ignored for OCI images.** Harmless: the
 build steps are `&&`-chained and each script sets its own `set -euo pipefail`.
 
+### The Lansweeper agent is installed, but reporting is a separate question
+
+ADR 0017. Two traps, both of which look like bugs and are not.
+
+**"Installed but never reported" is the correct state on most laptops.** The
+scanning server answers only over a VPN, and `ik-os-firstboot` runs at
+`network-online.target` — before any user has logged in, and before either
+tunnel exists. So the install step deliberately does **not** check reachability:
+if it did, every laptop would carry a `lansweeper.failed` stamp and
+`ik-os diagnostics` would report a permanent failure on a perfectly healthy
+machine. Reporting is triggered instead by
+`/usr/lib/NetworkManager/dispatcher.d/50-ik-os-lansweeper` on `up`/`vpn-up`,
+which starts `ik-os-lansweeper-report.service`; that unit probes, stamps
+`/var/lib/ik-os/lansweeper/last-reachable`, and does nothing on failure.
+
+**The probe must treat a timeout as unreachable, not just a refused connection.**
+Measured against the real server: ports 80 and 443 connect instantly while 9524
+times out with no RST, because it is dropped rather than closed. A
+`connect`-refused check would read a firewall drop rule as "reachable" and hand
+data to a black hole.
+
+**`systemctl start` + `is-active` is not a health check for this unit.** The
+vendor unit is `Type=simple` with `Restart=always`, so `start` returns as soon as
+the process is forked. Measured on a VM with a deliberately broken `ExecStart`:
+`is-active` said *active* immediately and *failed* three seconds later. So
+`ensure_service` settles for up to three seconds, bails early once systemd has
+decided, and reports `NRestarts` — because with `Restart=always` a crash loop
+looks healthy at any single instant. This mattered in practice: the first
+version returned success over a dead daemon.
+
+**Presence is not health, and the idempotent path has to know that.** An install
+that failed its own checks still left a registered unit behind, so the next boot
+took the "already installed" shortcut, re-checked nothing, and stamped the step
+done — observed for real as `lansweeper: FAILED` on one boot and `lansweeper: ok`
+on the next with nothing fixed in between. Every path now goes through
+`ensure_service`.
+
+Two smaller things worth knowing. The dispatcher hook lives in `config/network/`,
+and its filename is dictated by NetworkManager (`50-ik-os-lansweeper`) — it
+matches neither `*.sh` nor `ik-os-*`, so `just lint` and the CI shell job carry
+an extra `find` clause for it or it would never be shellchecked. And the vendor
+unit name has changed between LsAgent versions (`ls-agent.service`,
+`LansweeperAgentService`), so every place that touches it resolves the name at
+runtime rather than hardcoding one.
+
 ### draw.io is not a Flatpak, and nothing updates it for you
 
 Every other GUI application comes from Flathub. draw.io is the one exception

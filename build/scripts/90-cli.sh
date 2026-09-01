@@ -12,6 +12,8 @@ install -Dm0755 "${CTX}/scripts/firstboot/ik-os-firstboot"  /usr/libexec/ik-os/i
 install -Dm0755 "${CTX}/scripts/firstboot/ik-os-provision-vpn" /usr/libexec/ik-os/ik-os-provision-vpn
 install -Dm0755 "${CTX}/scripts/firstboot/ik-os-enroll"     /usr/libexec/ik-os/ik-os-enroll
 install -Dm0755 "${CTX}/scripts/firstboot/ik-os-user-groups" /usr/libexec/ik-os/ik-os-user-groups
+install -Dm0755 "${CTX}/scripts/firstboot/ik-os-lansweeper"  /usr/libexec/ik-os/ik-os-lansweeper
+install -Dm0755 "${CTX}/scripts/firstboot/ik-os-lansweeper-report" /usr/libexec/ik-os/ik-os-lansweeper-report
 install -Dm0755 "${CTX}/scripts/firstboot/ik-os-homebrew"    /usr/libexec/ik-os/ik-os-homebrew
 install -Dm0755 "${CTX}/scripts/firstboot/ik-os-hostname"    /usr/libexec/ik-os/ik-os-hostname
 install -Dm0755 "${CTX}/scripts/firstboot/ik-os-notify"      /usr/libexec/ik-os/ik-os-notify

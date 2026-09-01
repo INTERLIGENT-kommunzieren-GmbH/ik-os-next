@@ -1,0 +1,25 @@
+[Unit]
+Description=Report this device to Lansweeper when the scanning server is reachable
+Documentation=https://github.com/interligent-kommunzieren-gmbh/ik-os-next
+Documentation=file:///usr/share/doc/ik-os/lansweeper.md
+# No After=network-online.target: this unit is triggered by NetworkManager's
+# dispatcher on every up/vpn-up, not by boot ordering. The server is VPN-only,
+# so "the network is up" is not the event that matters.
+ConditionPathExists=/usr/lib/ik-os/policy.env
+
+[Service]
+Type=oneshot
+# Deliberately NOT RemainAfterExit=yes. This unit must run again on every
+# network transition; with RemainAfterExit the first run (which finds no tunnel)
+# would leave it "active (exited)" and systemd would ignore every later start --
+# the same trap documented on ik-os-homebrew.service, which is how Homebrew
+# stopped installing at all.
+ExecStart=/usr/libexec/ik-os/ik-os-lansweeper-report
+# The probe is bounded at 3s and the only other work is a systemctl start, so a
+# run that takes this long is stuck rather than slow.
+TimeoutStartSec=2min
+StandardOutput=journal
+
+# No [Install] section on purpose: nothing should enable this at boot. It is
+# started by the NetworkManager dispatcher hook and by ik-os-lansweeper. That is
+# also why it is absent from config/systemd/ik-os.preset.

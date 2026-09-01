@@ -1,0 +1,71 @@
+#!/bin/bash
+# SDD §38, ADR 0017 — start Lansweeper reporting once the server is reachable.
+#
+# The scanning server is reachable ONLY over a VPN, and first boot runs long
+# before any tunnel exists. So installing (ik-os-lansweeper) and reporting (this)
+# are separate: this runs on every network and VPN transition, probes the server,
+# and only then lets the agent talk.
+#
+# Cheap and quiet by design. It is triggered by NetworkManager on every
+# interface change, so an unreachable server is a silent exit 0, not a failure.
+set -euo pipefail
+
+POLICY=/usr/lib/ik-os/policy.env
+PREFIX=/var/opt/LansweeperAgent
+STATE=/var/lib/ik-os/lansweeper
+
+# shellcheck disable=SC1090
+[[ -r "$POLICY" ]] && . "$POLICY"
+
+log() { printf '[ik-os-lansweeper-report] %s\n' "$*"; }
+
+[[ "${LANSWEEPER_ENABLED:-false}" == "true" ]] || exit 0
+[[ -n "${LANSWEEPER_SERVER:-}" ]] || exit 0
+[[ -d "$PREFIX" ]] || { log "agent not installed yet"; exit 0; }
+
+PORT="${LANSWEEPER_PORT:-9524}"
+
+vendor_unit() {
+    local u
+    for u in ls-agent LansweeperAgentService lsagent LsAgentService; do
+        if systemctl cat "${u}.service" >/dev/null 2>&1; then
+            printf '%s.service' "$u"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# TIMEOUT COUNTS AS UNREACHABLE, and that is the whole point of using a timeout
+# rather than testing for a refused connection. Measured against the real server
+# on 2026-09-01: port 9524 is dropped, not refused -- it times out with no RST,
+# while 80/443 on the same host connect instantly. A refused-only check would
+# read a firewall drop rule as "reachable" and hand data to a black hole.
+reachable() {
+    timeout 3 bash -c "exec 3<>/dev/tcp/${LANSWEEPER_SERVER}/${PORT}" 2>/dev/null
+}
+
+mkdir -p "$STATE"
+
+if ! reachable; then
+    # Expected on any machine without a tunnel up. Not an error, not a stamp.
+    log "${LANSWEEPER_SERVER}:${PORT} not reachable — nothing to do"
+    exit 0
+fi
+
+# Reachable at the TCP level. That is all this proves: it does NOT prove the
+# scanning server has the LsAgent listener enabled or that it accepts
+# agent-reported assets. Do not report more confidence than that.
+log "${LANSWEEPER_SERVER}:${PORT} reachable"
+date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/last-reachable"
+
+if unit=$(vendor_unit); then
+    if systemctl is-active --quiet "$unit"; then
+        log "${unit} already running"
+    else
+        log "starting ${unit}"
+        systemctl start "$unit" || log "${unit} failed to start"
+    fi
+else
+    log "no vendor unit found; is the agent installed?"
+fi

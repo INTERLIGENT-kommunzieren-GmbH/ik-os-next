@@ -175,6 +175,49 @@ cmd_diagnostics() {
         kv "VPN profile" "$(nmcli -t -f NAME connection show 2>/dev/null | grep -qx ik-office && echo present || echo 'missing — run ik-os-provision-vpn')"
         kv "VPN provisioned" "$([[ -r /var/lib/ik-os/vpn/ik-office-cert.pem ]] && echo yes || echo 'no — device certificate not installed (see /usr/share/doc/ik-os/vpn.md)')"
         echo
+        bold "Asset inventory"
+        # ADR 0017. The distinction that matters here is installed vs reporting:
+        # the scanning server is VPN-only, so an installed agent that has never
+        # reported is the NORMAL state on a laptop off the tunnel, not a fault.
+        # Wording it as a failure would train people to ignore this section.
+        kv "Policy" "${LANSWEEPER_ENABLED:-false}"
+        if [[ "${LANSWEEPER_ENABLED:-false}" != "true" ]]; then
+            kv "Agent" "disabled by policy"
+        else
+            kv "Server" "${LANSWEEPER_SERVER:-unset}:${LANSWEEPER_PORT:-9524}"
+            _lsdir=/var/opt/LansweeperAgent
+            _lsini="${_lsdir}/LsAgent.ini"
+            if [[ -d "$_lsdir" ]]; then
+                kv "Installed" "$(cat /var/lib/ik-os/lansweeper/installed-version 2>/dev/null || echo yes)"
+                _lsunit=""
+                for _u in ls-agent LansweeperAgentService lsagent LsAgentService; do
+                    systemctl cat "${_u}.service" >/dev/null 2>&1 && { _lsunit="${_u}.service"; break; }
+                done
+                if [[ -n "$_lsunit" ]]; then
+                    kv "Service" "${_lsunit} ($(systemctl is-active "$_lsunit" 2>/dev/null))"
+                else
+                    kv "Service" "no vendor unit found"
+                fi
+                # AssetId is assigned by the server, so it is empty until the
+                # first successful report -- which is the real "is this working"
+                # signal, not whether the daemon is running.
+                if [[ -r "$_lsini" ]]; then
+                    # kv() renders an empty value as "unknown", which is wrong
+                    # here: an empty AssetId is not missing information, it is
+                    # the server saying it has never accepted a report from this
+                    # machine. Say that instead.
+                    _lsid=$(awk -F= 'tolower($1) ~ /^[[:space:]]*assetid[[:space:]]*$/ {gsub(/[[:space:]]/,"",$2); print $2; exit}' "$_lsini" 2>/dev/null)
+                    _lssent=$(awk -F= 'tolower($1) ~ /^[[:space:]]*lastsent[[:space:]]*$/ {sub(/^[[:space:]]+/,"",$2); print $2; exit}' "$_lsini" 2>/dev/null)
+                    kv "Asset ID"  "${_lsid:-not yet assigned by the server}"
+                    kv "Last sent" "${_lssent:-never}"
+                fi
+                kv "Last reachable" "$(cat /var/lib/ik-os/lansweeper/last-reachable 2>/dev/null \
+                    || echo 'never — the server needs the ik-office or datacenter VPN')"
+            else
+                kv "Agent" "not installed — journalctl -u ik-os-firstboot -b"
+            fi
+        fi
+        echo
         bold "GNOME"
         kv "Shell" "$(gnome-shell --version 2>/dev/null)"
         kv "Session" "${XDG_SESSION_TYPE:-unknown}"

@@ -1,0 +1,285 @@
+#!/bin/bash
+# SDD §38, ADR 0017 — install and configure the Lansweeper inventory agent.
+#
+# Installs ONLY. Whether the machine can actually reach the scanning server is
+# not this script's problem: the server is VPN-only and first boot runs before
+# any tunnel exists, so demanding reachability here would leave a .failed stamp
+# on every laptop on every boot. Reporting is triggered by
+# ik-os-lansweeper-report.service when a network or VPN comes up.
+#
+# Idempotent: returns 0 immediately once the agent is installed and configured
+# for the server named in policy.env.
+set -euo pipefail
+
+POLICY=/usr/lib/ik-os/policy.env
+PINS=/usr/lib/ik-os/lansweeper.env
+PREFIX=/var/opt/LansweeperAgent
+STATE=/var/lib/ik-os/lansweeper
+
+# shellcheck disable=SC1090
+[[ -r "$POLICY" ]] && . "$POLICY"
+# shellcheck disable=SC1090
+[[ -r "$PINS" ]] && . "$PINS"
+
+log() { printf '[ik-os-lansweeper] %s\n' "$*"; }
+die() { log "FATAL: $*"; exit 1; }
+
+# Under `set -o pipefail`, `producer | grep -q` reports a successful match as a
+# FAILURE: grep exits on the first hit, the producer takes SIGPIPE, and the
+# pipeline status is the producer's. Capture first, match second -- the same
+# reason build/scripts/lib.sh provides output_matches_fixed.
+out_has() {
+    local pattern="$1"; shift
+    local out
+    out=$("$@" 2>/dev/null) || true
+    grep -qF -- "$pattern" <<<"$out"
+}
+
+# The vendor installer has used more than one unit name across versions
+# (ls-agent.service in the docs, LansweeperAgentService in the wild), so it is
+# resolved rather than hardcoded. Empty output means "not installed yet".
+vendor_unit() {
+    local u
+    for u in ls-agent LansweeperAgentService lsagent LsAgentService; do
+        # `systemctl cat` is the existence test: list-unit-files exits 0 even
+        # when nothing matched, so it cannot answer this question.
+        if systemctl cat "${u}.service" >/dev/null 2>&1; then
+            printf '%s.service' "$u"
+            return 0
+        fi
+    done
+    return 1
+}
+
+configured_server() {
+    [[ -r "${PREFIX}/LsAgent.ini" ]] || return 1
+    # awk rather than grep|head|cut: one process, no early-exit pipeline.
+    awk -F= 'tolower($1) ~ /^[[:space:]]*server[[:space:]]*$/ {
+                 gsub(/[[:space:]]/, "", $2); print $2; exit }' \
+        "${PREFIX}/LsAgent.ini" 2>/dev/null
+}
+
+# Bring the vendor service up and confirm it is actually running. BOTH the
+# fresh-install path and the already-installed path go through this, because
+# they used to disagree: an install that failed its health checks still left a
+# registered unit behind, so the NEXT boot took the already-installed shortcut,
+# never re-checked anything, and stamped the step done. Observed for real on a
+# VM boot -- "lansweeper: FAILED" followed by "lansweeper: ok" with nothing
+# fixed in between. Presence is not health.
+ensure_service() {
+    local unit
+    unit=$(vendor_unit) || { log "no vendor systemd unit is registered"; return 1; }
+    systemctl enable "$unit" >/dev/null 2>&1 || true
+    systemctl is-active --quiet "$unit" \
+        || systemctl start "$unit" >/dev/null 2>&1 || true
+
+    # The vendor unit is Type=simple, so `systemctl start` returns as soon as
+    # the process is forked and an immediate is-active check reports "active"
+    # for a binary that exits straight away. Measured on a VM: a deliberately
+    # broken ExecStart read "active" at once and "failed" three seconds later.
+    # Settle before judging, and bail early once systemd has decided.
+    local waited=0
+    while (( waited < 3 )); do
+        sleep 1
+        waited=$(( waited + 1 ))
+        systemctl is-failed --quiet "$unit" && break
+    done
+    if ! systemctl is-active --quiet "$unit"; then
+        log "${unit} is not running"
+        systemctl status "$unit" --no-pager -n 10 2>&1 | sed 's/^/        /' || true
+        return 1
+    fi
+
+    # Restart=always can make a crash loop look healthy at any single instant,
+    # so say how many times it has already restarted rather than only "active".
+    local restarts
+    restarts=$(systemctl show -p NRestarts --value "$unit" 2>/dev/null) || restarts=0
+    if [[ "${restarts:-0}" -gt 0 ]] 2>/dev/null; then
+        log "vendor unit: ${unit} (active, but has restarted ${restarts}x)"
+    else
+        log "vendor unit: ${unit} (active)"
+    fi
+
+    # The vendor writes ExecStart=/opt/LansweeperAgent/LSAgent into its unit
+    # regardless of the --prefix it was given. That resolves here only because
+    # /opt is a symlink to var/opt in the ostree layout (the same property ADR
+    # 0008 relies on for the Brother driver). If that ever stops being true, or
+    # the vendor starts honouring the prefix, the unit points at nothing --
+    # so check the path it actually names rather than assuming.
+    local execstart
+    execstart=$(systemctl show -p ExecStart --value "$unit" 2>/dev/null \
+                | sed -n 's/.*path=\([^ ;]*\).*/\1/p')
+    if [[ -n "$execstart" && ! -x "$execstart" ]]; then
+        log "${unit} names ExecStart=${execstart}, which is not executable"
+        return 1
+    fi
+
+    # SDD §50 — the agent pushes outbound and must not start listening.
+    if out_has ":${PORT}" ss -ltn; then
+        log "WARNING: something is listening on ${PORT}; the agent should push only"
+    fi
+
+    printf '%s\n' "${LSAGENT_VERSION:-unknown}" > "${STATE}/installed-version"
+    return 0
+}
+
+# --- policy ----------------------------------------------------------------
+if [[ "${LANSWEEPER_ENABLED:-false}" != "true" ]]; then
+    # Disabled by policy. If a previous image installed the agent, stop it --
+    # but do not uninstall: removing it would also discard the AssetId, and
+    # re-enabling would then register the machine as a brand new asset.
+    if unit=$(vendor_unit); then
+        log "disabled by policy — stopping ${unit} (install left in place)"
+        systemctl disable --now "$unit" >/dev/null 2>&1 || true
+    else
+        log "disabled by policy"
+    fi
+    exit 0
+fi
+
+[[ -n "${LANSWEEPER_SERVER:-}" ]] \
+    || die "LANSWEEPER_ENABLED=true but LANSWEEPER_SERVER is empty"
+PORT="${LANSWEEPER_PORT:-9524}"
+
+mkdir -p "$STATE"
+
+# --- already installed? ----------------------------------------------------
+# Three cases: configured for the right server (nothing to do), configured for a
+# different one (policy changed), or not installed at all.
+if unit=$(vendor_unit); then
+    current=$(configured_server || true)
+    if [[ "$current" == "$LANSWEEPER_SERVER" ]]; then
+        log "already installed and configured for ${LANSWEEPER_SERVER}"
+        # Non-zero here leaves the step unstamped so it retries, rather than
+        # declaring success over a dead daemon.
+        ensure_service || exit 1
+        # Hand off to the reporting path: it decides whether the server is
+        # reachable, this script never does.
+        systemctl start --no-block ik-os-lansweeper-report.service 2>/dev/null || true
+        exit 0
+    fi
+
+    # The server address changed in policy. Re-running an InstallBuilder
+    # installer over an existing prefix is not a documented operation -- it may
+    # prompt, refuse, or half-migrate -- so the address is updated in place
+    # instead, which also preserves the AssetId the server already knows.
+    log "server changed: ${current:-unset} -> ${LANSWEEPER_SERVER}"
+    if [[ -w "${PREFIX}/LsAgent.ini" ]]; then
+        sed -i -E \
+            -e "s|^([[:space:]]*[Ss]erver[[:space:]]*=).*|\1 ${LANSWEEPER_SERVER}|" \
+            -e "s|^([[:space:]]*[Pp]ort[[:space:]]*=).*|\1 ${PORT}|" \
+            "${PREFIX}/LsAgent.ini"
+    fi
+    if [[ "$(configured_server || true)" == "$LANSWEEPER_SERVER" ]]; then
+        log "updated in place; restarting ${unit}"
+        systemctl restart "$unit" >/dev/null 2>&1 || true
+        ensure_service || exit 1
+        systemctl start --no-block ik-os-lansweeper-report.service 2>/dev/null || true
+        exit 0
+    fi
+    # Could not rewrite the config (unexpected layout). Fall through and let the
+    # installer lay it down again rather than leaving the machine pointed at a
+    # server that policy no longer names.
+    log "could not update LsAgent.ini in place — reinstalling"
+fi
+
+# --- fetch -----------------------------------------------------------------
+[[ -n "${LSAGENT_URL:-}" && -n "${LSAGENT_SHA256:-}" ]] \
+    || die "LSAGENT_URL/LSAGENT_SHA256 are not set; ${PINS} is missing or incomplete"
+
+# /var/cache is deliberately NOT captured into tmpfiles by 95-finalize.sh, so it
+# exists here only because systemd's own var.conf recreates it. Do not rely on
+# that: a 33 MB download failing on a missing directory would look like a
+# network fault.
+mkdir -p /var/cache
+WORK=$(mktemp -d /var/cache/ik-os-lansweeper.XXXXXX)
+trap 'rm -rf "$WORK"' EXIT
+RUN="${WORK}/LsAgent-linux-x64_${LSAGENT_VERSION:-unknown}.run"
+
+log "fetching LsAgent ${LSAGENT_VERSION:-unknown}"
+# Vendored installers are downloaded, never piped: a pipeline hides curl's exit
+# status, and this payload is about to be executed as root.
+curl -fsSL --retry 3 --retry-delay 5 --max-time 600 -o "$RUN" "$LSAGENT_URL" \
+    || { log "download failed — retrying on the next boot"; exit 1; }
+
+ACTUAL=$(sha256sum "$RUN" | cut -d' ' -f1)
+if [[ "$ACTUAL" != "$LSAGENT_SHA256" ]]; then
+    # Deliberately not a die() with an install anyway: an unverified payload
+    # that is about to run as root does not get the benefit of the doubt.
+    log "SHA256 MISMATCH — refusing to install"
+    log "  expected ${LSAGENT_SHA256}"
+    log "  got      ${ACTUAL}"
+    log "the pin in config/image.env and the vendor build disagree; do not ship"
+    exit 1
+fi
+log "checksum verified"
+
+# --- install ---------------------------------------------------------------
+# /var/opt exists via /usr/lib/tmpfiles.d/ik-os-base-dirs.conf. The prefix is in
+# /var because the agent writes AssetId/LastSent back into its own directory and
+# self-updates, so a /usr prefix cannot work (ADR 0017).
+chmod 0755 "$RUN"
+log "installing into ${PREFIX} (server ${LANSWEEPER_SERVER}:${PORT})"
+# No --agentkey: relay/cloud mode is out of scope by decision (ADR 0017), so
+# there is no credential to pass, redact or keep out of the image.
+"$RUN" --mode unattended \
+       --prefix "$PREFIX" \
+       --server "$LANSWEEPER_SERVER" \
+       --port "$PORT" \
+    || { log "vendor installer failed — retrying on the next boot"; exit 1; }
+
+[[ -d "$PREFIX" ]] || { log "installer reported success but ${PREFIX} is absent"; exit 1; }
+
+# --- prove the binaries can actually run -----------------------------------
+# Same reasoning as 67-printer-vendor.sh: the vendor declares almost nothing
+# about its dependencies, so a missing library would show up as a daemon that
+# starts and never scans rather than as an install failure. The bundled .NET
+# payload can only be checked after extraction, which is here.
+#
+# ONE component is exempt, and only this one:
+# libcoreclrtraceptprovider.so is .NET's LTTng tracing provider. It wants
+# liblttng-ust.so.0 and the runtime loads it only when LTTng tracing is
+# explicitly enabled, which nothing here does. Observed on a VM boot of
+# testing.20260901.local: this file is the ONLY unresolved object in the whole
+# payload, LSAgent itself resolves everything, and ls-agent.service comes up
+# active either way. Failing on it blocked a perfectly working agent, and
+# pulling liblttng-ust into the host to satisfy a tracing feature nobody uses
+# would need a Rule 11 justification it does not have.
+LDD_OPTIONAL=( libcoreclrtraceptprovider.so )
+MISSING=0 CHECKED=0 EXEMPT=0
+while IFS= read -r bin; do
+    out_has 'ELF' file "$bin" || continue
+    CHECKED=$(( CHECKED + 1 ))
+    out_has 'not found' ldd "$bin" || continue
+
+    base=$(basename "$bin")
+    exempt=no
+    for o in "${LDD_OPTIONAL[@]}"; do
+        [[ "$base" == "$o" ]] && { exempt=yes; break; }
+    done
+    if [[ "$exempt" == yes ]]; then
+        # Worth a line in the journal -- silence here would make a genuinely
+        # broken payload indistinguishable from this known-benign case.
+        log "note: ${base} is short of an optional library (tracing only, not loaded)"
+        EXEMPT=$(( EXEMPT + 1 ))
+        continue
+    fi
+    log "MISSING LIBRARIES: ${bin}"
+    ldd "$bin" 2>/dev/null | grep 'not found' | sed 's/^/        /' || true
+    MISSING=1
+done < <(find "$PREFIX" -maxdepth 2 -type f -perm -u+x 2>/dev/null | sort)
+log "${CHECKED} binaries checked for unresolved libraries (${EXEMPT} exempt)"
+if (( MISSING )); then
+    log "LsAgent cannot resolve its shared libraries; it would never scan"
+    log "add the missing library packages to packages/base/packages.list"
+    exit 1
+fi
+
+# --- service ---------------------------------------------------------------
+ensure_service || { log "the agent installed but its service will not run"; exit 1; }
+
+# --- reporting is somebody else's job --------------------------------------
+# The server is VPN-only and there is almost certainly no tunnel up right now.
+# ik-os-lansweeper-report.service probes and starts reporting when there is.
+log "installed and configured; reporting starts when the server is reachable"
+systemctl start --no-block ik-os-lansweeper-report.service 2>/dev/null || true

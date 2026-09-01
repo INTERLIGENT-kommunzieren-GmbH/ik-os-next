@@ -23,8 +23,12 @@ jobs:
       - name: shellcheck
         run: |
           mapfile -t files < <(
-              find build scripts migration iso tests -type f \
-                   \( -name '*.sh' -o -name 'ik-os' -o -name 'ik-os-*' \) \
+              # config/network holds the NetworkManager dispatcher hook, whose
+              # filename NM dictates (50-ik-os-lansweeper) -- it matches neither
+              # *.sh nor ik-os-*, so it needs its own clause or it is never linted.
+              find build scripts migration iso tests config/network -type f \
+                   \( -name '*.sh' -o -name 'ik-os' -o -name 'ik-os-*' \
+                      -o -name '[0-9][0-9]-ik-os-*' \) \
                    ! -name '*.service' | sort
           )
           (( ${#files[@]} )) || { echo "::error::no scripts found"; exit 1; }
@@ -71,6 +75,18 @@ jobs:
         run: REPO="$GITHUB_WORKSPACE" bash build/validation/check-drawio.sh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  lsagent:
+    name: LsAgent pin
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      # LsAgent is fetched at first boot, not at build time (ADR 0017), so a
+      # withdrawn or replaced vendor build cannot fail the image build. It fails
+      # on every laptop instead: the checksum guard refuses to install and the
+      # step retries forever. A HEAD request here catches it in seconds.
+      - name: Validate the pinned LsAgent build against the vendor
+        run: REPO="$GITHUB_WORKSPACE" bash build/validation/check-lsagent.sh
 
   policy:
     name: SDD policy checks

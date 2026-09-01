@@ -106,6 +106,7 @@ STEPS=(
     "once:snakeoil:setup_snakeoil:Generating security certificates"
     "image:enrollment:/usr/libexec/ik-os/ik-os-enroll:Enrolling this device"
     "image:vpn:setup_vpn:Configuring the company VPN"
+    "image:lansweeper:/usr/libexec/ik-os/ik-os-lansweeper:Registering this device for asset inventory"
     "image:flatpak:setup_flatpak:Installing applications"
     "image:verify-docker:verify_docker:Checking Docker"
     "image:verify-cups:verify_cups:Checking printing"

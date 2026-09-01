@@ -815,5 +815,77 @@ ostree_version_matches() {
 }
 check "ostree and os-release agree"          ostree_version_matches
 
+echo "-- asset inventory (SDD §38, ADR 0017) --"
+check "the install helper ships"             test -x /usr/libexec/ik-os/ik-os-lansweeper
+check "the reporting helper ships"           test -x /usr/libexec/ik-os/ik-os-lansweeper-report
+check "the report unit ships"                test -f /usr/lib/systemd/system/ik-os-lansweeper-report.service
+# NetworkManager silently ignores a dispatcher script that is not executable or
+# is group/world-writable, which looks exactly like "the hook never fires".
+check "the NM dispatcher hook ships"         test -x /usr/lib/NetworkManager/dispatcher.d/50-ik-os-lansweeper
+nm_hook_permissions_ok() {
+    local m; m=$(stat -c '%a %U' /usr/lib/NetworkManager/dispatcher.d/50-ik-os-lansweeper)
+    [[ "$m" == "755 root" ]]
+}
+check "the hook is 755 root (NM ignores otherwise)" nm_hook_permissions_ok
+# The hook ships in /usr, not /etc, so it depends on NetworkManager supporting
+# the /usr/lib dispatcher directory -- added in NM 1.22. Debian forky is far
+# past that, but if a future base regressed it the hook would simply never fire
+# and reporting would silently never begin, which is invisible without this.
+nm_reads_usr_dispatcher() {
+    local v major minor
+    v=$(NetworkManager --version 2>/dev/null) || return 1
+    major=${v%%.*}; minor=${v#*.}; minor=${minor%%.*}
+    (( major > 1 )) || (( major == 1 && minor >= 22 ))
+}
+check "NetworkManager reads /usr dispatcher (>=1.22)" nm_reads_usr_dispatcher
+check "first boot runs the install step"     out_has "image:lansweeper:" cat /usr/libexec/ik-os/ik-os-firstboot
+check "the pins are baked in"                test -s /usr/lib/ik-os/lansweeper.env
+check "the pin carries a checksum"           bash -c '. /usr/lib/ik-os/lansweeper.env; test -n "$LSAGENT_SHA256"'
+check "the pin carries a URL"                bash -c '. /usr/lib/ik-os/lansweeper.env; test -n "$LSAGENT_URL"'
+check "the server is configured"             bash -c '. /usr/lib/ik-os/policy.env; test -n "$LANSWEEPER_SERVER"'
+check "the port is configured"               bash -c '. /usr/lib/ik-os/policy.env; test -n "$LANSWEEPER_PORT"'
+check "documentation ships"                  test -s /usr/share/doc/ik-os/lansweeper.md
+check "diagnostics reports asset inventory"  out_has "Asset inventory" bash -c "ik-os diagnostics 2>/dev/null"
+
+# Relay/cloud mode is excluded by decision (ADR 0017): its key is a company auth
+# token and would need per-device provisioning. Asserting its absence means the
+# exclusion survives someone "just adding a fallback".
+# Comments are stripped first: both helpers *document* that --agentkey is
+# deliberately not passed, and a naive grep reads that explanation as usage.
+no_cloud_relay_key() {
+    local f
+    for f in /usr/libexec/ik-os/ik-os-lansweeper \
+             /usr/libexec/ik-os/ik-os-lansweeper-report; do
+        out_has '--agentkey' sed 's/#.*//' "$f" && return 1
+    done
+    return 0
+}
+check "no cloud relay key is used"           no_cloud_relay_key
+
+# The reporting unit must NOT be boot-enabled: it is triggered by the dispatcher
+# and by the install step. A preset entry would run it on every boot for nothing.
+check "the report unit is not preset-enabled" bash -c '! grep -q "ik-os-lansweeper-report" /usr/lib/systemd/system-preset/50-ik-os.preset'
+# Same trap as ik-os-homebrew.service: RemainAfterExit would make the first run
+# (which finds no tunnel) stick as "active (exited)" and every later dispatcher
+# start would be silently ignored -- reporting would never begin.
+check "the report unit can re-run" \
+    bash -c '! grep -qiE "^RemainAfterExit=(yes|true|1)" /usr/lib/systemd/system/ik-os-lansweeper-report.service'
+
+# The agent is machine state and must not be in the image (ADR 0017). If any of
+# this is present, a build step installed it and every laptop would share one
+# AssetId -- the snakeoil-key problem, with an inventory system attached.
+check "the agent is NOT baked into the image" bash -c '! test -e /var/opt/LansweeperAgent && ! test -e /usr/lib/opt/LansweeperAgent'
+check "no LsAgent.ini is baked in" \
+    bash -c 'test -z "$(find / -xdev -name LsAgent.ini -print -quit 2>/dev/null)"' 
+no_vendor_agent_unit() {
+    local u
+    for u in ls-agent LansweeperAgentService lsagent LsAgentService; do
+        [[ -e "/usr/lib/systemd/system/${u}.service" ]] && return 1
+        [[ -e "/etc/systemd/system/${u}.service" ]] && return 1
+    done
+    return 0
+}
+check "no vendor agent unit is baked in"     no_vendor_agent_unit
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]] || { echo "image verification FAILED"; exit 1; }

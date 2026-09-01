@@ -119,6 +119,100 @@ echo "-- first boot --"
 firstboot_clean() { ! compgen -G '/var/lib/ik-os/firstboot/*.failed' >/dev/null; }
 check "no first-boot step failed"            firstboot_clean
 
+echo "-- asset inventory (SDD §38, ADR 0017) --"
+# The point of this block: "installed" and "reporting" are different states, and
+# on a laptop off the VPN the correct state is installed-but-not-reporting. The
+# hard checks cover configuration; anything needing the server degrades to
+# manual() rather than failing a healthy machine.
+LS_PREFIX=/var/opt/LansweeperAgent
+LS_INI="${LS_PREFIX}/LsAgent.ini"
+# Sourced through a variable, not a literal path: with `shellcheck -x` an
+# unresolvable absolute source makes shellcheck discard the definitions it
+# already resolved from lib.sh, and every check() above this line then reports
+# SC2218. Same shape as scripts/diagnostics/ik-os.
+LS_POLICY=/usr/lib/ik-os/policy.env
+# shellcheck disable=SC1090
+[[ -r "$LS_POLICY" ]] && . "$LS_POLICY"
+
+lansweeper_unit() {
+    local u
+    for u in ls-agent LansweeperAgentService lsagent LsAgentService; do
+        systemctl cat "${u}.service" >/dev/null 2>&1 && { printf '%s.service' "$u"; return 0; }
+    done
+    return 1
+}
+ini_field() {
+    [[ -r "$LS_INI" ]] || return 1
+    awk -F= -v k="$1" 'tolower($1) ~ "^[[:space:]]*" k "[[:space:]]*$" {
+        gsub(/[[:space:]]/, "", $2); print $2; exit }' "$LS_INI"
+}
+lansweeper_reachable() {
+    [[ -n "${LANSWEEPER_SERVER:-}" ]] || return 1
+    timeout 3 bash -c "exec 3<>/dev/tcp/${LANSWEEPER_SERVER}/${LANSWEEPER_PORT:-9524}" 2>/dev/null
+}
+
+if [[ "${LANSWEEPER_ENABLED:-false}" != "true" ]]; then
+    skip "asset inventory" "disabled by policy"
+else
+    check "the agent is installed"               test -d "$LS_PREFIX"
+    check "the agent config exists"              test -s "$LS_INI"
+    # Plain functions, not bash -c: a subshell does not inherit these helpers,
+    # so the check would pass or fail for the wrong reason.
+    points_at_configured_server() {
+        [[ "$(ini_field server)" == "${LANSWEEPER_SERVER}" ]]
+    }
+    check "it points at the configured server"   points_at_configured_server
+    vendor_service_running() {
+        local u; u=$(lansweeper_unit) || return 1
+        systemctl is-active --quiet "$u"
+    }
+    check "the vendor service is running"        vendor_service_running
+    # The vendor unit hardcodes ExecStart=/opt/LansweeperAgent/LSAgent no matter
+    # what --prefix it was given, and that resolves only because /opt is a
+    # symlink to var/opt here (ADR 0017, and the same property ADR 0008 needs).
+    # Assert the path it names, so the day that assumption breaks shows up here
+    # rather than as an agent that silently never scans.
+    vendor_execstart_resolves() {
+        local u p
+        u=$(lansweeper_unit) || return 1
+        p=$(systemctl show -p ExecStart --value "$u" 2>/dev/null \
+            | sed -n 's/.*path=\([^ ;]*\).*/\1/p')
+        [[ -n "$p" ]] || return 1
+        [[ -x "$p" ]]
+    }
+    check "the unit's ExecStart path resolves"    vendor_execstart_resolves
+    # SDD §50 — the agent pushes outbound; it must not start listening.
+    port_is_not_listening() {
+        local out; out=$(ss -ltn 2>/dev/null) || true
+        ! grep -qE "[:.]${LANSWEEPER_PORT:-9524}[[:space:]]" <<<"$out"
+    }
+    check "the agent opened no listening port"   port_is_not_listening
+    # The install step must NOT have failed just because the server was
+    # unreachable — that is the whole design and the easiest thing to regress.
+    check "the install step did not fail" \
+        test ! -e /var/lib/ik-os/firstboot/lansweeper.failed
+    check "the reporting unit can re-run" \
+        bash -c '[ "$(systemctl show -p RemainAfterExit --value ik-os-lansweeper-report.service)" != yes ]'
+    check "the reporting unit is not failed" \
+        bash -c '! systemctl is-failed --quiet ik-os-lansweeper-report.service'
+
+    # Everything below needs the scanning server, so it is conditional by design.
+    if lansweeper_reachable; then
+        ok "the scanning server is reachable"
+        check "a reachability stamp was written" test -s /var/lib/ik-os/lansweeper/last-reachable
+        # AssetId is assigned by the server on the first accepted report, so it
+        # can lag the probe by up to one scan interval (minimum one hour).
+        if [[ -n "$(ini_field assetid)" ]]; then
+            ok "the server assigned an AssetId"
+        else
+            manual "AssetId assigned — reachable but not yet reported; recheck after one scan interval"
+        fi
+    else
+        manual "the scanning server is reachable — needs the ik-office or datacenter VPN"
+        manual "this device appears in Lansweeper — verify in the console"
+    fi
+fi
+
 echo "-- provisioning re-runs per image, not per boot --"
 STATE=/var/lib/ik-os/firstboot
 # The stamp that decides whether the setup splash is shown. Absent means the
@@ -141,7 +235,7 @@ check "the recorded image is the booted one"  last_run_is_current
 # list it first booted with forever.
 image_stamps_are_stamped() {
     local f n
-    for n in enrollment vpn flatpak verify-docker verify-cups; do
+    for n in enrollment vpn lansweeper flatpak verify-docker verify-cups; do
         f="${STATE}/${n}.done"
         [[ -e "$f" ]] || continue
         [[ -s "$f" ]] || return 1

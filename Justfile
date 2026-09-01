@@ -289,8 +289,12 @@ lint:
     #!/usr/bin/env bash
     set -euo pipefail
     mapfile -t files < <(
-        find build scripts migration iso tests -type f \
-             \( -name '*.sh' -o -name 'ik-os' -o -name 'ik-os-*' \) \
+        # config/network holds the NetworkManager dispatcher hook, whose
+        # filename NM dictates (50-ik-os-lansweeper) -- it matches neither
+        # *.sh nor ik-os-*, so it needs its own clause or it is never linted.
+        find build scripts migration iso tests config/network -type f \
+             \( -name '*.sh' -o -name 'ik-os' -o -name 'ik-os-*' \
+                -o -name '[0-9][0-9]-ik-os-*' \) \
              ! -name '*.service' | sort
     )
     (( ${#files[@]} )) || { echo "no scripts found"; exit 1; }
@@ -319,6 +323,11 @@ check-flatpaks:
 [group('Check')]
 check-drawio:
     ./build/validation/check-drawio.sh
+
+# Check the pinned LsAgent build is still published by the vendor (ADR 0017)
+[group('Check')]
+check-lsagent:
+    ./build/validation/check-lsagent.sh
 
 # Behaviourally test the container signature policy
 [group('Check')]

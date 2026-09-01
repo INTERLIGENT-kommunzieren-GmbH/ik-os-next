@@ -54,7 +54,7 @@ the disk.
     Containerfile           multi-stage build; bootc/composefs from pinned source
     build/scripts/          ordered build steps (00 preflight -> 95 finalize)
     build/validation/       package-list and in-image acceptance checks
-    config/                 apt, boot, cups, docker, security, systemd, company
+    config/                 apt, boot, cups, docker, network, security, systemd, company
     packages/               the OS package inventory, one list per role
     desktop/gnome/          dconf defaults, locks, and the pinned extension set
     systemd/                ik-os units and timers
