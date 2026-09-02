@@ -146,9 +146,12 @@ log "Assembling the ISO"
 mkdir -p "$OUT"
 VERSION=$(date -u +%Y%m%d)
 ISO_PATH="${OUT}/ik-os-installer-${VERSION}.iso"
+# The volume id uses d-characters only (A-Z 0-9 _); hyphens make xorriso warn
+# that it does not comply with ISO 9660 / ECMA 119. Nothing looks the medium up
+# by label -- grub.cfg searches by file -- so it is free to be compliant.
 xorriso -as mkisofs \
     -iso-level 3 \
-    -volid "IK-OS-INSTALL" \
+    -volid "IK_OS_INSTALL" \
     -output "$ISO_PATH" \
     -eltorito-alt-boot \
     -e efi.img \
@@ -157,5 +160,7 @@ xorriso -as mkisofs \
     -append_partition 2 0xef "$ESP" \
     "${WORK}/iso"
 
-sha256sum "$ISO_PATH" > "${ISO_PATH}.sha256"
+# Record the bare filename, not the in-container /output path, so
+# `sha256sum -c` works next to the ISO on the host.
+( cd "$OUT" && sha256sum "$(basename "$ISO_PATH")" > "$(basename "$ISO_PATH").sha256" )
 log "ISO: ${ISO_PATH} ($(du -h "$ISO_PATH" | cut -f1))"
