@@ -83,8 +83,13 @@ Track the milestones in [SDD §62](docs/SDD.md) and the hardware matrix in
 
 The previous Bluefin-based image shipped the ik-office OpenVPN client key and
 `tls-crypt` pre-shared key inside the published container image, and they are
-also committed to that public repository. ik-os does not carry them — the VPN
-identity is provisioned per device at enrolment.
+also committed to that public repository. ik-os carries the same identity, in
+`config/company/vpn/certs/`, so the company VPN works on a freshly installed
+machine (ADR 0018). That is a deliberate, bounded exception to Rule 13: the
+material is already public, and the profile is `password-tls`, so the
+certificate is one factor of two — the username and password are in neither the
+repository nor the image. It does not extend to any other credential, and CI
+fails on a private key committed anywhere else.
 
 The exposed material is **not** being reissued, deliberately: the VPN is
 `password-tls`, so the certificate is only one of two factors and the password

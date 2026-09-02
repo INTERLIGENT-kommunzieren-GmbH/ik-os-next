@@ -794,9 +794,29 @@ check "openvpn GTK3 editor plugin (nm-connection-editor)" \
     bash -c 'compgen -G "/usr/lib/*/NetworkManager/libnm-vpn-plugin-openvpn-editor.so"'
 
 echo "-- security (SDD §27, §50) --"
-check "no private keys in the image"         bash -c '! grep -rlq "BEGIN.*PRIVATE KEY" /etc /usr/lib/ik-os /usr/share/ik-os 2>/dev/null'
+# The VPN identity is the one deliberate exception, so this scans everywhere it
+# used to scan except the directory the bundle now legitimately occupies.
+check "no stray private keys in the image"   bash -c '! grep -rlq "BEGIN.*PRIVATE KEY" /etc /usr/share/ik-os $(ls -d /usr/lib/ik-os/* 2>/dev/null | grep -v "^/usr/lib/ik-os/vpn$") 2>/dev/null'
 check "no shared snakeoil key"               bash -c '! test -e /etc/ssl/private/ssl-cert-snakeoil.key'
-check "no VPN client key baked in"           bash -c '! test -e /etc/openvpn/certs/ik-office-key.pem'
+# The predecessor image's path. Nothing should resurrect it: /etc is writable at
+# runtime and world-readable, and that copy is what leaked.
+check "no VPN key at the old /etc path"      bash -c '! test -e /etc/openvpn/certs/ik-office-key.pem'
+# The VPN identity ships in the image on purpose (ADR 0018), and comes from the
+# build context, so it is unconditional: every build has it or the build is
+# broken.
+check "VPN identity complete"                bash -c 'for f in ca cert key tls-crypt; do test -s "/usr/lib/ik-os/vpn/certs/ik-office-$f.pem" || exit 1; done'
+# 0755 directory, 0644 files, deliberately and including the private key. The
+# GUI editors run as the user and READ these files rather than just referencing
+# their paths, so anything stricter breaks the Identity tab. The material is
+# public, so restricting it locally would protect nothing anyway. Asserted
+# rather than left to chance, so a future "hardening" of these modes shows up
+# here as a failing check with this comment next to it instead of as a bug
+# report about the VPN dialog.
+check "VPN cert dir is browsable"            bash -c '[[ "$(stat -c %a /usr/lib/ik-os/vpn/certs)" == 755 ]]'
+check "VPN files are user-readable"          bash -c 'for f in ca cert key tls-crypt; do [[ "$(stat -c %a "/usr/lib/ik-os/vpn/certs/ik-office-$f.pem")" == 644 ]] || exit 1; done'
+check "VPN cert is not expired"              bash -c 'openssl x509 -in /usr/lib/ik-os/vpn/certs/ik-office-cert.pem -noout -checkend 0'
+check "VPN key matches the certificate"      bash -c '[[ "$(openssl pkey -in /usr/lib/ik-os/vpn/certs/ik-office-key.pem -pubout)" == "$(openssl x509 -in /usr/lib/ik-os/vpn/certs/ik-office-cert.pem -noout -pubkey)" ]]'
+check "no build secrets left in the image"   bash -c '! compgen -G "/run/secrets/*"'
 check "no SSH host keys in the image"        bash -c '! compgen -G "/etc/ssh/ssh_host_*"'
 check "CA-IK is trusted"                     bash -c 'grep -rq "CA-IK" /etc/ca-certificates.conf'
 check "sysctl hardening shipped"             test -f /usr/lib/sysctl.d/90-ik-os.conf

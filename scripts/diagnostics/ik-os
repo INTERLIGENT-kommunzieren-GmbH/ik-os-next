@@ -173,7 +173,30 @@ cmd_diagnostics() {
         bold "Networking"
         nmcli -t -f NAME,TYPE,STATE connection show 2>/dev/null | sed 's/^/    /'
         kv "VPN profile" "$(nmcli -t -f NAME connection show 2>/dev/null | grep -qx ik-office && echo present || echo 'missing — run ik-os-provision-vpn')"
-        kv "VPN provisioned" "$([[ -r /var/lib/ik-os/vpn/ik-office-cert.pem ]] && echo yes || echo 'no — device certificate not installed (see /usr/share/doc/ik-os/vpn.md)')"
+        # The identity normally ships in the image; a bundle in /var overrides
+        # it. Report which one is actually in use, not just yes/no.
+        kv "VPN identity" "$(
+            if [[ -r /var/lib/ik-os/vpn/ik-office-cert.pem ]]; then
+                echo "local bundle (/var/lib/ik-os/vpn)"
+            elif [[ -r /usr/lib/ik-os/vpn/certs/ik-office-cert.pem ]]; then
+                echo "shipped in the image"
+            else
+                echo 'MISSING — the image should ship one; this image is broken (see /usr/share/doc/ik-os/vpn.md)'
+            fi)"
+        kv "VPN cert expires" "$(
+            for d in /var/lib/ik-os/vpn /usr/lib/ik-os/vpn/certs; do
+                [[ -r "$d/ik-office-cert.pem" ]] || continue
+                openssl x509 -in "$d/ik-office-cert.pem" -noout -enddate 2>/dev/null | cut -d= -f2
+                break
+            done || echo 'n/a')"
+        # A present, provisioned profile still cannot be opened or connected
+        # without network-manager-openvpn-gnome: GNOME Settings reports only
+        # "unable to load VPN connection editor", which says nothing about
+        # which package is missing.
+        kv "VPN GUI plugin" "$(compgen -G '/usr/lib/*/NetworkManager/libnm-gtk4-vpn-plugin-openvpn-editor.so' >/dev/null \
+            && echo present || echo 'missing — network-manager-openvpn-gnome is not installed; Settings cannot edit or connect the profile')"
+        kv "VPN editor" "$([[ -x /usr/bin/nm-connection-editor ]] \
+            && echo 'nm-connection-editor' || echo 'missing — no editor for the OpenVPN fields Settings does not expose')"
         echo
         bold "Asset inventory"
         # ADR 0017. The distinction that matters here is installed vs reporting:

@@ -111,13 +111,17 @@ If the image has no `/usr/share/ik-os/ik-os-mok.crt`, its bootloader is
 unsigned and there is nothing to enrol — that machine needs an image built with
 the MOK secrets configured, not a firmware change.
 
-## The VPN identity does not migrate
+## The VPN identity comes from the new image
 
-ik-os provisions the ik-office VPN identity per device at enrolment instead of
-baking it into the image, so a migrated machine gets its bundle from
-`ik-os-provision-vpn` rather than inheriting the one it was running. Set
-`VPN_PROVISION_MODE` in `policy.env` before migrating a machine that needs the
-VPN, or it comes up with the profile present and flagged unprovisioned.
+A migrated machine does not inherit the bundle it was running under Bluefin. It
+gets the identity from the ik-os image itself, which carries it at
+`/usr/lib/ik-os/vpn/certs/` (ADR 0018), and `ik-os-provision-vpn` renders the
+profile against it on first boot. Nothing to set and nothing to copy.
+
+One case still needs attention: a machine that was given its own bundle in
+`/var/lib/ik-os/vpn/` keeps it, because `/var` survives the migration and a
+local bundle overrides the image's. `ik-os diagnostics` reports which identity
+is in use.
 
 This is not a rotation, and none is planned — the previously published key and
 `tls-crypt` material stay in service. See `config/company/vpn/README.md` for why

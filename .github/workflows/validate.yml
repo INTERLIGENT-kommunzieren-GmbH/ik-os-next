@@ -95,13 +95,42 @@ jobs:
       - uses: actions/checkout@v5
       - name: No secrets in the build context (Rule 13)
         run: |
+          # config/company/vpn/certs/ is the one sanctioned location: the
+          # ik-office VPN identity is committed on purpose (ADR 0018) because it
+          # is already public, is one factor of two, and deferring it shipped
+          # workstations with no VPN. The check still has to run everywhere else
+          # -- a cosign key, a MOK key or a Lansweeper token reaching git would
+          # be a real leak, and this is what catches it.
+          #
           # No empty alternation branch: some greps (ugrep) reject `(A|B|)`.
-          if grep -rlE 'BEGIN [A-Z0-9 ]*PRIVATE KEY' --exclude-dir=.git . ; then
-            echo "::error::a private key is committed to this repository."
-            echo "SDD §27 / Rule 13: secrets are provisioned at enrolment, never shipped."
+          if grep -rlE 'BEGIN [A-Z0-9 ]*PRIVATE KEY' --exclude-dir=.git . \
+               | grep -v '^\./config/company/vpn/certs/' | grep . ; then
+            echo "::error::a private key is committed outside config/company/vpn/certs/."
+            echo "Rule 13: secrets must not be embedded in the image. The ik-office"
+            echo "VPN identity is the single documented exception (ADR 0018) and it"
+            echo "does not generalise to any other credential."
             exit 1
           fi
-          echo "no private keys found"
+          echo "no unexpected private keys found"
+
+          # The exception is exactly four files. Anything else appearing there
+          # would inherit the allowance above without ever being reviewed.
+          unexpected=$(find config/company/vpn/certs -type f \
+            ! -name 'ik-office-ca.pem' ! -name 'ik-office-cert.pem' \
+            ! -name 'ik-office-key.pem' ! -name 'ik-office-tls-crypt.pem')
+          if [[ -n "$unexpected" ]]; then
+            echo "::error::unexpected files in config/company/vpn/certs/:"
+            echo "$unexpected"
+            exit 1
+          fi
+
+          # A committed certificate silently expiring is a fleet-wide VPN outage.
+          if ! openssl x509 -in config/company/vpn/certs/ik-office-cert.pem \
+                 -noout -checkend 2592000; then
+            echo "::error::ik-office-cert.pem expires within 30 days ($(openssl x509 -in config/company/vpn/certs/ik-office-cert.pem -noout -enddate))."
+            exit 1
+          fi
+          echo "VPN certificate valid: $(openssl x509 -in config/company/vpn/certs/ik-office-cert.pem -noout -enddate)"
       - name: No Fedora or NixOS base (Rules 1, 2)
         run: |
           if grep -nE '^FROM .*(fedora|centos|nixos|ubuntu)' Containerfile; then

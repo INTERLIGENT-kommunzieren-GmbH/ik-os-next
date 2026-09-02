@@ -1,6 +1,8 @@
 #!/bin/bash
 # SDD §39 — company configuration, kept separate from upstream Debian config.
-# SDD §27 / Rule 13 — no secrets are embedded in the image.
+# SDD §27 / Rule 13 — no secrets come from the build context. The one credential
+# the image does carry, the ik-office VPN identity, arrives as a build secret and
+# is a documented exception (ADR 0018).
 # shellcheck source=build/scripts/lib.sh
 . "${CTX:-/ctx}/build/scripts/lib.sh"
 load_env
@@ -27,19 +29,64 @@ install -Dm0644 "${CTX}/config/company/registries.d-ik-os.yaml" \
     /etc/containers/registries.d/ik-os.yaml
 
 # --- VPN (SDD §27) ---------------------------------------------------------
-# The client certificate and private key are per-device secrets and are NOT
-# part of the image. Only the profile and the server CA ship here; the identity
-# is provisioned at enrolment by ik-os-provision-vpn.
 install -Dm0644 "${CTX}/config/company/vpn/ik-office.nmconnection.in" \
     /usr/lib/ik-os/vpn/ik-office.nmconnection.in
 install -Dm0644 "${CTX}/config/company/vpn/README.md" \
     /usr/share/doc/ik-os/vpn.md
 
-if [[ -n "$(find "${CTX}/config/company" \( -name '*key*.pem' -o -name '*.key' \) -print -quit)" ]]; then
-    die "a private key is present in config/company/.
-       Rule 13 forbids embedding secrets in the OCI image. Provision it at
-       enrolment instead — see config/company/vpn/README.md."
-fi
+# The identity ships in the image. "Provision it later" produced machines with
+# no VPN at all: the mode was `manual`, whose entire implementation was a log
+# line, and the identity it deferred is CN=client1 -- one shared certificate for
+# the whole fleet, so deferring it bought no per-device isolation.
+#
+# The certificates are committed to this repository, which is public, and that
+# is deliberate rather than an oversight (ADR 0018). The same material is
+# already public in the predecessor repo and image, and the profile is
+# password-tls: the certificate is one factor of two, and the username and
+# password are in neither the repository nor the image (password-flags=4).
+#
+# /usr, not /var: 95-finalize.sh empties /var, so anything installed there is
+# gone from the image by the end of the build.
+VPN_CERT_SRC="${CTX}/config/company/vpn/certs"
+VPN_CERT_DIR=/usr/lib/ik-os/vpn/certs
+# 0755, not 0700. GNOME Settings and nm-connection-editor run as the user, and
+# their certificate pickers have to be able to list this directory -- a 0700
+# directory makes the Identity tab fail with "Could not read the contents of
+# certs / Permission denied" even though the connection itself would work,
+# because NetworkManager reads the files as root. This is what the predecessor
+# image did (a plain mkdir -p) and it is the combination known to work.
+install -d -m0755 "$VPN_CERT_DIR"
+for f in ca cert key tls-crypt; do
+    [[ -r "${VPN_CERT_SRC}/ik-office-${f}.pem" ]] \
+        || die "missing ${VPN_CERT_SRC}/ik-office-${f}.pem.
+       The image ships the ik-office VPN identity; see
+       config/company/vpn/README.md."
+done
+# All four are 0644, the key and tls-crypt included. The GUI editors run as the
+# user and read these files, not just reference their paths -- libnma inspects a
+# key to work out whether it is encrypted, which is what drives the "User key
+# password" field -- so a 0600 key leaves the Identity tab unable to validate
+# it. Restricting them would in any case protect nothing: this material is
+# committed to a public repository and baked into a public image, so a local
+# user who wanted the key could simply download it (ADR 0018).
+install -m0644 "${VPN_CERT_SRC}/ik-office-key.pem"       "${VPN_CERT_DIR}/"
+install -m0644 "${VPN_CERT_SRC}/ik-office-tls-crypt.pem" "${VPN_CERT_DIR}/"
+install -m0644 "${VPN_CERT_SRC}/ik-office-ca.pem"        "${VPN_CERT_DIR}/"
+install -m0644 "${VPN_CERT_SRC}/ik-office-cert.pem"      "${VPN_CERT_DIR}/"
+openssl x509 -in "${VPN_CERT_DIR}/ik-office-cert.pem" -noout -checkend 0 \
+    || die "config/company/vpn/certs/ik-office-cert.pem has expired.
+       Replace it before building; the VPN cannot connect with it."
+info "ik-office VPN identity installed ($(openssl x509 -in "${VPN_CERT_DIR}/ik-office-cert.pem" -noout -subject | sed 's/^subject=//'))"
+
+# The ik-office bundle is the one credential this repository carries, and
+# 0018 is explicit that the exception does not generalise. Anything else --
+# a cosign key, a MOK key, a Lansweeper relay token -- is still forbidden.
+while IFS= read -r k; do
+    die "a private key is present at ${k}.
+       Only config/company/vpn/certs/ may carry one (ADR 0018). Rule 13
+       forbids embedding any other secret in the image."
+done < <(command grep -rlE 'BEGIN [A-Z0-9 ]*PRIVATE KEY' "${CTX}/config" 2>/dev/null \
+         | command grep -v '^'"${CTX}"'/config/company/vpn/certs/')
 
 # --- asset inventory (SDD §38, ADR 0017) -----------------------------------
 # LsAgent is NOT installed here: it writes AssetId/LastSent back into its own

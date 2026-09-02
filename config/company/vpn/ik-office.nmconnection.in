@@ -3,6 +3,11 @@
 # per-device UUID and the file is written to
 # /etc/NetworkManager/system-connections/ik-office.nmconnection (mode 0600).
 #
+# @VPN_CERT_DIR@ resolves to /usr/lib/ik-os/vpn/certs when the identity shipped
+# in the image (the normal case), or to /var/lib/ik-os/vpn when a machine was
+# provisioned by hand. The provisioning script picks whichever actually holds a
+# certificate, so both keep working.
+#
 # password-flags=4 / username-flags=4 mean "always ask": no credentials are
 # stored in this file (SDD §27). Users may still save them to their keyring
 # after the first successful connection.
@@ -29,10 +34,10 @@ cert-pass-flags=0
 challenge-response-flags=2
 password-flags=4
 username-flags=4
-ca=/var/lib/ik-os/vpn/ik-office-ca.pem
-cert=/var/lib/ik-os/vpn/ik-office-cert.pem
-key=/var/lib/ik-os/vpn/ik-office-key.pem
-tls-crypt=/var/lib/ik-os/vpn/ik-office-tls-crypt.pem
+ca=@VPN_CERT_DIR@/ik-office-ca.pem
+cert=@VPN_CERT_DIR@/ik-office-cert.pem
+key=@VPN_CERT_DIR@/ik-office-key.pem
+tls-crypt=@VPN_CERT_DIR@/ik-office-tls-crypt.pem
 
 [ipv4]
 method=auto

@@ -1,5 +1,7 @@
 #!/bin/bash
-# SDD §27 — provision the per-device VPN identity. The image never carries it.
+# Install the ik-office VPN profile and point it at whichever identity this
+# machine has: the one shipped in the image (the default), or a bundle an
+# administrator placed in /var. Re-runnable by hand.
 set -euo pipefail
 
 POLICY=/usr/lib/ik-os/policy.env
@@ -7,17 +9,24 @@ POLICY=/usr/lib/ik-os/policy.env
 . "$POLICY"
 
 DEST=/var/lib/ik-os/vpn
+IMAGE_CERTS=/usr/lib/ik-os/vpn/certs
 TEMPLATE=/usr/lib/ik-os/vpn/ik-office.nmconnection.in
 CONN=/etc/NetworkManager/system-connections/ik-office.nmconnection
 
 log() { printf '[ik-os-provision-vpn] %s\n' "$*"; }
 
-case "${VPN_PROVISION_MODE:-manual}" in
+case "${VPN_PROVISION_MODE:-image}" in
     disabled)
         log "VPN provisioning disabled by policy"; exit 0 ;;
+    image)
+        # Nothing to fetch: 70-company.sh already unpacked the identity into
+        # /usr at build time. That is what makes the VPN work on a freshly
+        # installed workstation. Which identity actually gets used is resolved
+        # and logged below, since a local bundle still overrides this one.
+        : ;;
     enrollment)
         [[ -n "${ENROLLMENT_URL:-}" ]] || { log "ENROLLMENT_URL unset"; exit 1; }
-        install -d -m0700 "$DEST"
+        install -d -m0755 "$DEST"
         log "fetching the device VPN bundle from the enrolment service"
         curl -fsSL --cacert /etc/ssl/certs/ca-certificates.crt \
              "${ENROLLMENT_URL%/}/vpn/bundle" -o /tmp/vpn-bundle.tar \
@@ -30,16 +39,33 @@ case "${VPN_PROVISION_MODE:-manual}" in
         log "unknown VPN_PROVISION_MODE=${VPN_PROVISION_MODE}"; exit 1 ;;
 esac
 
-install -d -m0700 "$DEST"
+# 0755, with 0644 on the files inside: the GUI certificate pickers run as the
+# user and read them. Anything stricter breaks the Identity tab even though
+# NetworkManager, being root, could still bring the tunnel up. The material is
+# public, so nothing is protected by tightening it (ADR 0018).
+install -d -m0755 "$DEST"
+# A hand-placed bundle in /var wins over the image's, so a machine that has been
+# given its own identity keeps it across image updates.
 PROVISIONED=yes
-if [[ ! -r "${DEST}/ik-office-cert.pem" || ! -r "${DEST}/ik-office-key.pem" ]]; then
+if [[ -r "${DEST}/ik-office-cert.pem" && -r "${DEST}/ik-office-key.pem" ]]; then
+    CERT_DIR="$DEST"
+    log "using the locally provisioned identity in ${DEST}"
+    # 0644 for all four, key included: the GUI editors read these as the user,
+    # and a stricter mode leaves the Identity tab unable to validate the key.
+    chmod 0644 "${DEST}"/ik-office-*.pem 2>/dev/null || true
+elif [[ -r "${IMAGE_CERTS}/ik-office-cert.pem" && -r "${IMAGE_CERTS}/ik-office-key.pem" ]]; then
+    # /usr is read-only at runtime, so no chmod here: the modes were set at
+    # build time and the image carries them.
+    CERT_DIR="$IMAGE_CERTS"
+    log "using the VPN identity shipped in the image"
+else
+    CERT_DIR="$DEST"
     PROVISIONED=no
-    log "no device certificate in ${DEST}"
-    log "the ik-office profile will be created but cannot connect until"
-    log "ik-office-{ca,cert,key,tls-crypt}.pem are placed there and this is re-run"
+    log "no VPN identity in ${IMAGE_CERTS} or ${DEST}"
+    log "the image should carry one from config/company/vpn/certs -- this is a"
+    log "broken image, not a normal state. The profile will be created but"
+    log "cannot connect until an identity is present"
 fi
-chmod 0600 "${DEST}"/ik-office-key.pem "${DEST}"/ik-office-tls-crypt.pem 2>/dev/null || true
-chmod 0644 "${DEST}"/ik-office-ca.pem  "${DEST}"/ik-office-cert.pem      2>/dev/null || true
 
 # Reuse the existing UUID so re-running does not orphan the connection.
 if [[ -r "$CONN" ]]; then
@@ -50,6 +76,7 @@ fi
 
 install -d -m0755 /etc/NetworkManager/system-connections
 sed -e "s|@UUID@|${UUID}|" \
+    -e "s|@VPN_CERT_DIR@|${CERT_DIR}|" \
     -e "s|@VPN_REMOTE@|${VPN_REMOTE}|" \
     -e "s|@VPN_PORT@|${VPN_PORT}|" \
     -e "s|@VPN_DNS@|${VPN_DNS}|" \
@@ -61,12 +88,12 @@ nmcli connection reload 2>/dev/null || true
 # Record the state so `ik-os diagnostics` can report it rather than leaving a
 # silently non-functional connection in the GNOME menu.
 install -d -m0755 /var/lib/ik-os
-printf 'provisioned=%s\nchecked_at=%s\n' "$PROVISIONED" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+printf 'provisioned=%s\ncert_dir=%s\nchecked_at=%s\n' \
+    "$PROVISIONED" "$CERT_DIR" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     > /var/lib/ik-os/vpn-state
 if [[ "$PROVISIONED" == "yes" ]]; then
     log "ik-office VPN profile installed (credentials are prompted, never stored)"
 else
     log "ik-office VPN profile created, but NOT provisioned — it will fail to"
-    log "connect until the device certificate is installed. See"
-    log "/usr/share/doc/ik-os/vpn.md"
+    log "connect until an identity is installed. See /usr/share/doc/ik-os/vpn.md"
 fi

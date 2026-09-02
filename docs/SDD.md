@@ -818,6 +818,15 @@ The OCI image MUST NOT contain:
 
 Secrets MUST be provisioned after installation/enrollment.
 
+The ik-office VPN identity is the one recorded exception (ADR 0018): it is
+committed at `config/company/vpn/certs/` and ships in the image, because
+deferring it produced workstations with no working VPN, and because the
+credential is a single fleet-wide certificate — already public in the
+predecessor repository and image, and only one of two authentication factors —
+whose deferral bought no per-device isolation. The exception is enforced by
+path: `validate.yml` and `70-company.sh` still fail on a private key committed
+anywhere else.
+
 ---
 
 ## 28. Bluefin → ik-os Migration
