@@ -108,7 +108,11 @@ echo "ik-os-live" > "${WORK}/rootfs/etc/hostname"
 sed -i 's|^root:[^:]*:|root::|' "${WORK}/rootfs/etc/shadow"
 
 log "Staging the ik-os payload on the medium"
-cp "$PAYLOAD" "${WORK}/iso/ik-os/payload.oci"
+# An OCI *layout directory*, not an oci-archive tarball. bootc reads a layout
+# in place; the archive transport first untars ~1.4 GB into /var/tmp, which on
+# a live system is a RAM-backed tmpfs -- so the install died with "no space
+# left on device" on any machine under roughly 8 GB of RAM.
+skopeo copy "oci-archive:${PAYLOAD}" "oci:${WORK}/iso/ik-os/payload:ik-os"
 printf '%s\n' "$TARGET_REF" > "${WORK}/iso/ik-os/target-ref"
 
 log "Extracting the live kernel"
