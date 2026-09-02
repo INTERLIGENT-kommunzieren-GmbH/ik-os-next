@@ -49,7 +49,13 @@ jobs:
           ls -lh output/
 
       - name: Build the ISO builder
-        run: podman build -t ik-os-iso-builder -f iso/Containerfile.builder iso
+        # Built with sudo so it lands in root's storage: the ISO build below
+        # runs privileged (mmdebstrap needs mknod), and `sudo podman run` does
+        # not see images built by the rootless user -- it treats the name as a
+        # remote reference and tries to pull ik-os-iso-builder from Docker Hub.
+        # The Justfile solves the same problem by copying the image into root's
+        # storage; here there is no user-side build cache worth preserving.
+        run: sudo podman build -t ik-os-iso-builder -f iso/Containerfile.builder iso
 
       - name: Stage the image configuration
         # build-iso.sh reads iso/image.env twice: for DEBIAN_SUITE, which
