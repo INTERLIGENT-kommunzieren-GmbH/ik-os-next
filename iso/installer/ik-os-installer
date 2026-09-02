@@ -28,15 +28,24 @@ start the installer again."
 [[ -r "$PAYLOAD" ]] || die "The ik-os payload was not found at ${PAYLOAD}."
 
 # --- disk selection --------------------------------------------------------
-mapfile -t DISKS < <(lsblk -dnp -o NAME,SIZE,MODEL,TYPE | awk '$4=="disk"{print}')
-(( ${#DISKS[@]} )) || die "No disks were detected."
-
+# lsblk's columnar output cannot be parsed by field index: MODEL is empty on
+# virtio disks and multi-word on most real ones ("WD_BLACK SN850X 2000GB"), so
+# a fixed index lands on the wrong column in both directions and the installer
+# reports "No disks were detected" on hardware that plainly has disks. -P emits
+# unambiguous key="value" pairs; -e 7,11 drops loop and optical devices so the
+# live medium itself is never offered as a target.
 MENU=()
-for d in "${DISKS[@]}"; do
-    dev=$(awk '{print $1}' <<<"$d")
-    desc=$(cut -d' ' -f2- <<<"$d")
-    MENU+=("$dev" "$desc")
-done
+while IFS= read -r line; do
+    NAME=""; SIZE=""; MODEL=""; TYPE=""
+    eval "${line}"
+    [[ "${TYPE}" == "disk" ]] || continue
+    # zram is a compressed RAM block device, not an install target.
+    [[ "${NAME}" == /dev/zram* ]] && continue
+    MODEL="${MODEL%"${MODEL##*[![:space:]]}"}"   # lsblk pads MODEL with spaces
+    MENU+=("${NAME}" "${SIZE}${MODEL:+  ${MODEL}}")
+done < <(lsblk -dpn -P -e 7,11 -o NAME,SIZE,MODEL,TYPE)
+
+(( ${#MENU[@]} )) || die "No disks were detected."
 
 TARGET=$(whiptail --title "ik-os installer" \
     --menu "Select the disk to install ik-os on.\n\nEverything on the selected disk will be erased." \
