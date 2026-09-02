@@ -51,6 +51,15 @@ jobs:
       - name: Build the ISO builder
         run: podman build -t ik-os-iso-builder -f iso/Containerfile.builder iso
 
+      - name: Stage the image configuration
+        # build-iso.sh reads iso/image.env twice: for DEBIAN_SUITE, which
+        # decides the live system's Debian release, and for the bootc install
+        # flags it hands to the installer. Without it the build aborts with
+        # "FATAL: /iso/image.env not staged". The Justfile stages it the same
+        # way before mounting iso/ read-only; this workflow never did, which is
+        # why it has never completed a run.
+        run: cp config/image.env iso/image.env
+
       - name: Build the ISO
         run: |
           sudo podman run --rm --privileged \
