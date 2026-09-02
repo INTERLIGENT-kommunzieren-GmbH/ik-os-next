@@ -20,6 +20,14 @@ gnome-initial-setup             # SDD §36/§37 — creates the first user accou
                                 # locked root (SDD §27), so without this GDM comes
                                 # up with nothing to log in as.
 gnome-control-center            # printer UI required by SDD §23
+# gnome-control-center *Recommends* this, and the build installs with
+# --no-install-recommends, so it was silently absent. It is the GTK3 editor for
+# the ik-office VPN profile: Settings' own panel edits only name and IP, while
+# this one reaches the OpenVPN fields (remote, cipher, certificate paths) that
+# config/company/vpn/ik-office.nmconnection.in sets. Debian forky split it out
+# of the old network-manager-gnome, which no longer exists as a package -- the
+# applet half is now network-manager-applet, which GNOME Shell does not need.
+nm-connection-editor
 gnome-settings-daemon
 gnome-terminal
 nautilus

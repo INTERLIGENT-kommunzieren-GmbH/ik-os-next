@@ -70,7 +70,21 @@ cryptsetup
 
 ## --- networking -----------------------------------------------------------
 network-manager
-network-manager-openvpn         # company VPN (config/company, SDD §39)
+network-manager-openvpn         # company VPN (config/company, SDD §39) --
+                                # the NM service plugin, which is only the
+                                # daemon half.
+network-manager-openvpn-gnome   # the other half, and not pulled in by the
+                                # above: the editor plugins GNOME loads to
+                                # render the ik-office profile
+                                # (libnm-gtk4-vpn-plugin-openvpn-editor.so for
+                                # gnome-control-center, the GTK3 one for
+                                # nm-connection-editor), plus
+                                # nm-openvpn-auth-dialog, which prompts for
+                                # the credentials the profile deliberately
+                                # does not store (password-flags=4). Without
+                                # it Settings says "unable to load VPN
+                                # connection editor" and the connection can
+                                # never ask for a password.
 wireless-regdb
 iproute2
 iputils-ping

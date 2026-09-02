@@ -774,6 +774,25 @@ check "only NetworkManager provides wait-online" \
 check "NetworkManager-wait-online is enabled" \
     test -L /etc/systemd/system/network-online.target.wants/NetworkManager-wait-online.service
 
+# The ik-office profile is useless without all three of these, and
+# network-manager-openvpn alone ships only the first. Missing the editor made
+# GNOME Settings show "unable to load VPN connection editor"; missing the auth
+# dialog would leave a profile that cannot prompt for the password it refuses
+# to store (password-flags=4, config/company/vpn).
+check "openvpn NM service plugin" \
+    bash -c 'compgen -G "/usr/lib/*/NetworkManager/libnm-vpn-plugin-openvpn.so"'
+check "openvpn GTK4 editor plugin (GNOME Settings)" \
+    bash -c 'compgen -G "/usr/lib/*/NetworkManager/libnm-gtk4-vpn-plugin-openvpn-editor.so"'
+check "openvpn auth dialog" \
+    bash -c 'test -x /usr/libexec/nm-openvpn-auth-dialog || compgen -G "/usr/lib/*/nm-openvpn-auth-dialog"'
+# The fallback UI when Settings' panel is not enough. A Recommends of
+# gnome-control-center, so --no-install-recommends drops it unless it is named
+# explicitly in packages/desktop/packages.list.
+check "nm-connection-editor" \
+    test -x /usr/bin/nm-connection-editor
+check "openvpn GTK3 editor plugin (nm-connection-editor)" \
+    bash -c 'compgen -G "/usr/lib/*/NetworkManager/libnm-vpn-plugin-openvpn-editor.so"'
+
 echo "-- security (SDD §27, §50) --"
 check "no private keys in the image"         bash -c '! grep -rlq "BEGIN.*PRIVATE KEY" /etc /usr/lib/ik-os /usr/share/ik-os 2>/dev/null'
 check "no shared snakeoil key"               bash -c '! test -e /etc/ssl/private/ssl-cert-snakeoil.key'
