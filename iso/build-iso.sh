@@ -51,7 +51,11 @@ manifest = json.load(open(os.path.join(src, "manifest.json")))
 # (libostree, libcomposefs, glib, gpgme, curl, krb5, ...) is NOT copied here --
 # live-packages.list installs ostree and composefs from the same suite instead,
 # which is the only way the versions can be guaranteed to match.
-wanted = {"/usr/bin/bootc", "usr/bin/bootc"}
+# bootc reads ostree/prepare-root.conf from the filesystem it is *running on*,
+# not from the source image, so the live system needs the image's copy or
+# `bootc install` aborts with "Failed to find ostree/prepare-root.conf".
+wanted = {"/usr/bin/bootc", "usr/bin/bootc",
+          "/usr/lib/ostree/prepare-root.conf", "usr/lib/ostree/prepare-root.conf"}
 for layer in manifest["layers"]:
     digest = layer["digest"].split(":")[1]
     path = os.path.join(src, digest)
@@ -66,14 +70,21 @@ for layer in manifest["layers"]:
     except tarfile.ReadError:
         continue
 PY
-if [[ -x "${WORK}/payload-extract/usr/bin/bootc" ]]; then
-    cp -a "${WORK}/payload-extract/usr/." "${WORK}/rootfs/usr/"
-else
+if [[ ! -x "${WORK}/payload-extract/usr/bin/bootc" ]]; then
     echo "FATAL: could not extract bootc from the payload image." >&2
     echo "The installer cannot run without it; refusing to build an ISO that" >&2
     echo "would fail at install time." >&2
     exit 1
 fi
+# Checked here, not at install time: a silently missing prepare-root.conf only
+# surfaces after the user has typed ERASE and bootc has started partitioning.
+if [[ ! -r "${WORK}/payload-extract/usr/lib/ostree/prepare-root.conf" ]]; then
+    echo "FATAL: prepare-root.conf was not found in the payload image." >&2
+    echo "bootc install would abort part-way through. Check that" >&2
+    echo "build/scripts/10-ostree-layout.sh still writes it." >&2
+    exit 1
+fi
+cp -a "${WORK}/payload-extract/usr/." "${WORK}/rootfs/usr/"
 
 log "Installing the installer"
 # The installer must use exactly the backend and bootloader that
