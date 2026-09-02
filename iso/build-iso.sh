@@ -11,7 +11,17 @@ OUT="${OUT:-/output}"
 WORK="${WORK:-/work}"
 PAYLOAD="${PAYLOAD:?PAYLOAD (oci-archive of the ik-os image) must be set}"
 TARGET_REF="${TARGET_REF:-ik-os:testing}"
-SUITE="${SUITE:-stable}"
+
+# The live environment must be bootstrapped from the same Debian suite as the
+# image. bootc is built from source against that suite's libostree and
+# libcomposefs (ADR 0001), so a live system from a different suite cannot run
+# the binary at all -- it dies with "libostree-1.so.1: cannot open shared
+# object file" before it reaches the first partition.
+if [[ -r "${ISO_SRC}/image.env" ]]; then
+    # shellcheck disable=SC1091
+    . "${ISO_SRC}/image.env"
+fi
+SUITE="${SUITE:-${DEBIAN_SUITE:-stable}}"
 
 log() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 
@@ -37,8 +47,11 @@ python3 - "$WORK/payload-dir" "$WORK/payload-extract" <<'PY'
 import json, os, sys, tarfile
 src, dest = sys.argv[1], sys.argv[2]
 manifest = json.load(open(os.path.join(src, "manifest.json")))
-wanted = {"/usr/bin/bootc", "usr/bin/bootc",
-          "usr/lib/x86_64-linux-gnu/libcomposefs.so", "usr/bin/mkcomposefs"}
+# Only bootc: Debian does not package it. Its ~55-library dependency closure
+# (libostree, libcomposefs, glib, gpgme, curl, krb5, ...) is NOT copied here --
+# live-packages.list installs ostree and composefs from the same suite instead,
+# which is the only way the versions can be guaranteed to match.
+wanted = {"/usr/bin/bootc", "usr/bin/bootc"}
 for layer in manifest["layers"]:
     digest = layer["digest"].split(":")[1]
     path = os.path.join(src, digest)

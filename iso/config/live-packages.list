@@ -11,6 +11,13 @@ iproute2
 iputils-ping
 ca-certificates
 bootc-placeholder
+# bootc is extracted from the payload image, but its shared libraries are not:
+# they come from here, at the same suite as the image so the versions match.
+ostree
+composefs
+# BOOTC_BOOTLOADER=systemd -- bootc needs bootctl and the systemd-boot EFI
+# binaries to make the installed disk bootable.
+systemd-boot
 podman
 skopeo
 whiptail
