@@ -102,7 +102,7 @@ cp "${ISO_SRC}/config/grub.cfg" "${WORK}/grub-embedded.cfg"
 grub-mkstandalone \
     --format=x86_64-efi \
     --output="${WORK}/efi/EFI/BOOT/BOOTX64.EFI" \
-    --modules="part_gpt part_msdos fat iso9660 all_video normal linux echo configfile search search_label search_fs_uuid" \
+    --modules="part_gpt part_msdos fat iso9660 all_video normal linux echo configfile search search_label search_fs_uuid search_fs_file" \
     "boot/grub/grub.cfg=${WORK}/grub-embedded.cfg"
 
 ESP="${WORK}/esp.img"
