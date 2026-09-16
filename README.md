@@ -69,7 +69,7 @@ the disk.
 **Pre-M1.** The image builds end to end and passes `bootc container lint` plus
 all 55 in-container acceptance checks:
 
-    Debian 14 (forky) · pinned kernel 7.1.8-2
+    Debian 14 (forky) · pinned kernel 7.1.13-1
     bootc 1.16.9 (from source) · ostree 2026.2 + composefs 1.0.8 (Debian packages)
     GNOME Shell 50.3 · Docker 28.5.2 · Compose v2.40.3
 
