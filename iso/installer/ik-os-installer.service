@@ -2,6 +2,12 @@
 Description=ik-os installer
 After=multi-user.target systemd-udev-settle.service
 ConditionKernelCommandLine=ik-os.install
+# build-iso.sh masks getty@tty1 so that nothing else opens this TTY: two
+# readers split the keyboard, and two writers split each other's escape
+# sequences mid-draw. This is the backstop for a live system built without
+# that mask -- it does not replace it, because getty@.service is
+# Restart=always and would simply be restarted and stopped in a loop.
+Conflicts=getty@tty1.service
 
 [Service]
 Type=idle

@@ -386,6 +386,40 @@ unit name has changed between LsAgent versions (`ls-agent.service`,
 `LansweeperAgentService`), so every place that touches it resolves the name at
 runtime rather than hardcoding one.
 
+### The installer owns tty1, and nothing else may
+
+`getty@tty1.service` is enabled by Debian's preset, restarts instantly and
+forever (`Restart=always`, `RestartSec=0`), and resets its TTY on every start
+(`TTYReset`, `TTYVTDisallocate`). `ik-os-installer.service` runs on the same
+`/dev/tty1` with `StandardInput=tty-force`. Both therefore hold the console,
+and that produces two symptoms that look unrelated but are not:
+
+* **The keyboard does not control the installer.** Keystrokes are split between
+  agetty and whiptail, so the installer answers some of what is typed, or none
+  of it. In a VM, `systemctl restart getty@tty1` while the disk-selection
+  dialog is up replaces it with `ik-os-live login:` — the installer is still
+  running behind that prompt, waiting for an answer it can no longer receive.
+* **Stray characters in the window borders.** Two writers on one TTY interleave
+  mid-escape-sequence. whiptail draws with CSI sequences, and the terminfo
+  `linux` entry's `acsc` is an identity map drawn under Shift Out, so a
+  sequence cut in half by agetty's output leaves its tail on screen as literal
+  text.
+
+`iso/build-iso.sh` masks `getty@tty1` in the live system, which also covers
+`autovt@tty1` (an alias for it). The installer unit carries
+`Conflicts=getty@tty1.service` as a backstop only: with `Restart=always` a
+conflicted getty is restarted and stopped in a loop, so the mask is what
+actually fixes it.
+
+The live shell moved with it: root is still passwordless, but on **Alt+F2** and
+up, which logind spawns on demand.
+
+Two things this is *not*, both checked before settling on the above. The live
+console renders DEC line-drawing correctly in both UTF-8 and 8-bit mode, so the
+borders are not a charset-mode problem; and the live system has no locale set
+at all (`LC_CTYPE=POSIX`), which is untidy but did not affect drawing in
+testing.
+
 ### Four applications are not Flatpaks, and nothing updates them for you
 
 Most GUI applications come from Flathub. Four do not, and each unpacks a

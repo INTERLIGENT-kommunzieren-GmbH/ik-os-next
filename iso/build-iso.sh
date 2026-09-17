@@ -103,8 +103,37 @@ install -Dm0644 "${ISO_SRC}/installer/ik-os-installer.service" \
 ln -sf ../ik-os-installer.service \
     "${WORK}/rootfs/usr/lib/systemd/system/multi-user.target.wants/ik-os-installer.service"
 echo "ik-os-live" > "${WORK}/rootfs/etc/hostname"
-# Live session is passwordless root on tty1 only; it never reaches an installed
-# system, and the ISO carries no company secrets.
+
+# The installer owns tty1, exclusively. It must, and this is not a preference:
+# getty@tty1.service is enabled by Debian's preset, it sets Restart=always with
+# RestartSec=0, and its unit carries TTYReset and TTYVTDisallocate. So agetty
+# and the installer both open /dev/tty1, and the consequences are the two bugs
+# this masking fixes:
+#
+#   * Keystrokes are split between agetty and whiptail, so the installer
+#     responds to roughly half of what is typed -- or to none of it, once
+#     agetty wins and the console shows a login prompt over the running
+#     installer. Reproduced in a VM: `systemctl restart getty@tty1` replaces
+#     the disk-selection dialog with "ik-os-live login:" while the installer is
+#     still sitting there waiting for an answer.
+#   * Two processes writing one TTY interleave mid-escape-sequence. whiptail
+#     draws with CSI sequences (the terminfo `linux` acsc is an identity map
+#     drawn under Shift Out), so a sequence cut in half by agetty's output
+#     leaves its tail on screen as literal text -- which is where stray
+#     characters in the window borders come from.
+#
+# Masking is the fix rather than Conflicts= in the installer unit: with
+# Restart=always, a conflicted getty is restarted and stopped in a loop.
+# Masking getty@tty1 also covers autovt@tty1, which is an alias for it.
+ln -sf /dev/null "${WORK}/rootfs/etc/systemd/system/getty@tty1.service"
+rm -f "${WORK}/rootfs/etc/systemd/system/getty.target.wants/getty@tty1.service"
+[[ -L "${WORK}/rootfs/etc/systemd/system/getty@tty1.service" ]] \
+    || { echo "FATAL: could not mask getty@tty1 in the live system." >&2; exit 1; }
+
+# Live session is passwordless root; it never reaches an installed system, and
+# the ISO carries no company secrets. tty1 belongs to the installer (masked
+# above), so the shell is on tty2 and up -- Alt+F2 from the installer -- which
+# logind spawns on demand through autovt@.
 sed -i 's|^root:[^:]*:|root::|' "${WORK}/rootfs/etc/shadow"
 
 log "Staging the ik-os payload on the medium"
