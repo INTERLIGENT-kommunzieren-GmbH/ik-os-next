@@ -63,6 +63,39 @@ check "appstream metadata is present" \
     bash -c "compgen -G '/var/lib/flatpak/appstream/flathub/*/*' >/dev/null"
 check "flatpak search returns results"       bash -c 'timeout 60 flatpak search drawio | grep -q drawio'
 
+echo "-- Teams video backgrounds (ADR 0020) --"
+# Teams is a packaged application here, not a Flatpak, because the company
+# backgrounds are configured through /etc/teams-for-linux/config.json and a
+# Flatpak cannot read /etc. Both at once is the state to catch: two launcher
+# entries, two profiles, and the settings only reaching one of them. A fresh
+# install cannot reach it -- the id is out of the list -- but a machine migrated
+# from Bluefin keeps whatever /var/lib/flatpak already held.
+check "the Flathub build is gone" \
+    bash -c '! flatpak info --system com.github.IsmaelMartinez.teams_for_linux >/dev/null 2>&1'
+check "teams-for-linux is installed"         test -x /usr/bin/teams-for-linux
+# The picker fetches its images over this socket. If the service is down the
+# company tiles quietly fall back to Microsoft's own assets, so a dead service
+# looks like "the backgrounds were never added" rather than like a failure.
+check "the backgrounds service is running" \
+    bash -c 'systemctl is-active --quiet ik-os-teams-backgrounds.service'
+check "it is listening on 127.0.0.1:8421" \
+    bash -c 'ss -ltn 2>/dev/null | grep -q "127.0.0.1:8421"'
+# Not just listening: serving. This is the request Teams makes for the first
+# slot, and the CORS header is the part that took an afternoon to find -- the
+# picker draws the image into a canvas and silently refuses to apply it without
+# the header, with nothing logged anywhere.
+teams_background_is_served() {
+    local slot headers
+    slot=$(grep -v '^[[:space:]]*#' /usr/share/ik-os/teams-backgrounds/slots.txt \
+           | grep -v '^[[:space:]]*$' | head -1)
+    headers=$(curl -fsS -I --max-time 5 "http://127.0.0.1:8421/${slot}.jpg" 2>/dev/null) || return 1
+    grep -qi '^content-type: *image/jpeg' <<<"$headers" || return 1
+    grep -qi '^access-control-allow-origin:' <<<"$headers"
+}
+check "a company background is served with CORS" teams_background_is_served
+check "the client reads the company defaults" \
+    bash -c 'grep -q "127.0.0.1:8421" /etc/teams-for-linux/config.json'
+
 echo "-- units must stay re-runnable --"
 # RemainAfterExit on a .path-triggered oneshot leaves it active after the
 # boot-time no-op run, and systemd then ignores every later trigger. That is

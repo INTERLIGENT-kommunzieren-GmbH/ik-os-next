@@ -292,10 +292,13 @@ lint:
         # config/network holds the NetworkManager dispatcher hook, whose
         # filename NM dictates (50-ik-os-lansweeper) -- it matches neither
         # *.sh nor ik-os-*, so it needs its own clause or it is never linted.
+        # *.py is excluded for the same kind of reason in reverse:
+        # scripts/desktop/ik-os-teams-backgrounds.py matches ik-os-* but is
+        # Python, and shellcheck errors out (SC1071) on its shebang.
         find build scripts migration iso tests config/network -type f \
              \( -name '*.sh' -o -name 'ik-os' -o -name 'ik-os-*' \
                 -o -name '[0-9][0-9]-ik-os-*' \) \
-             ! -name '*.service' | sort
+             ! -name '*.service' ! -name '*.py' | sort
     )
     (( ${#files[@]} )) || { echo "no scripts found"; exit 1; }
     printf '  %s\n' "${files[@]}"
@@ -323,6 +326,21 @@ check-flatpaks:
 [group('Check')]
 check-drawio:
     ./build/validation/check-drawio.sh
+
+# Check the DevPod pin, and whether upstream is still shipping (ADR 0021)
+[group('Check')]
+check-devpod:
+    ./build/validation/check-devpod.sh
+
+# Check the pinned Sidra release against upstream (ADR 0019)
+[group('Check')]
+check-sidra:
+    ./build/validation/check-sidra.sh
+
+# Check the Teams pin, backgrounds and that Flathub's build is gone (ADR 0020)
+[group('Check')]
+check-teams:
+    ./build/validation/check-teams-for-linux.sh
 
 # Check the pinned LsAgent build is still published by the vendor (ADR 0017)
 [group('Check')]

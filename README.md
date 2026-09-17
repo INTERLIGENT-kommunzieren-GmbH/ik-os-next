@@ -15,7 +15,7 @@ to the specification in [`docs/SDD.md`](docs/SDD.md).
 | Kernel | pinned to an explicit validated version from the target release |
 | Desktop | GNOME with ArcMenu (`Super+Space`), Bluefin-style extensions |
 | Containers | Docker Engine, Compose v2, Buildx |
-| Applications | Flatpak/Flathub (GUI), Homebrew (CLI), OCI containers (project deps) |
+| Applications | Flatpak/Flathub (GUI), Homebrew (CLI), OCI containers (project deps), four pinned vendor packages |
 | Printing | CUPS, driverless IPP, IPP-over-USB |
 | Hardware | Framework laptops, Intel 11th Gen through Core Ultra Series 3, Ryzen 7040 / Ryzen AI |
 
@@ -49,6 +49,36 @@ See [`docs/development.md`](docs/development.md).
 [`docs/migration.md`](docs/migration.md). Do not use the ISO for this; it wipes
 the disk.
 
+## Applications not from Flathub
+
+§54 routes GUI applications to Flatpak. Five are baked into the image instead,
+each with an ADR saying why, and each pinned — four by version and sha256 in
+`config/desktop/`, one by the signing key of its vendor's APT repository:
+
+| | why | pin |
+| --- | --- | --- |
+| Claude Desktop | first-party APT repository, not on Flathub ([ADR 0007](docs/adr/0007-claude-desktop.md)) | apt |
+| draw.io | the Flathub package is end-of-life ([ADR 0016](docs/adr/0016-drawio-from-upstream-deb.md)) | `drawio.env` |
+| DevPod | the Flathub package is end-of-life, and upstream is quiet too ([ADR 0021](docs/adr/0021-devpod-from-upstream-deb.md)) | `devpod.env` |
+| Sidra | on no Flatpak remote at all ([ADR 0019](docs/adr/0019-sidra-from-upstream-deb.md)) | `sidra.env` |
+| Teams | a Flatpak cannot read `/etc/teams-for-linux/config.json`, where the company video backgrounds are configured ([ADR 0020](docs/adr/0020-teams-for-linux-from-upstream-deb.md)) | `teams-for-linux.env` |
+
+Nothing updates these but their pins, so `scripts/maintenance/update-*.sh` moves
+one and CI warns when upstream is ahead. Teams is the one to move promptly: as
+a Flathub id it would have updated itself, and as a pin it will not. DevPod is
+the one to reconsider: its pin is already upstream's newest stable release, and
+that release is over a year old.
+
+Nothing has been installed from this image yet, so no machine carries an older
+copy of any of them. The one case that can produce two launcher entries is a
+Bluefin machine migrated in place: the migration leaves `/var` alone, which is
+what preserves `/home`, so a Flatpak already in `/var/lib/flatpak` survives it.
+First boot will not reinstall Teams or DevPod — both ids are out of
+`config/desktop/system-flatpaks.list` — but it will not remove a leftover
+either:
+
+    flatpak uninstall --system com.github.IsmaelMartinez.teams_for_linux
+
 ## Repository layout
 
     Containerfile           multi-stage build; bootc/composefs from pinned source
@@ -57,6 +87,7 @@ the disk.
     config/                 apt, boot, cups, docker, network, security, systemd, company
     packages/               the OS package inventory, one list per role
     desktop/gnome/          dconf defaults, locks, and the pinned extension set
+    branding/               wallpapers, Teams video backgrounds, Plymouth, GDM
     systemd/                ik-os units and timers
     scripts/                first boot, diagnostics, maintenance
     migration/bluefin/      ik-os-migrate
@@ -67,11 +98,11 @@ the disk.
 ## Status
 
 **Pre-M1.** The image builds end to end and passes `bootc container lint` plus
-all 55 in-container acceptance checks:
+all 300 in-container acceptance checks:
 
-    Debian 14 (forky) · pinned kernel 7.1.13-1
-    bootc 1.16.9 (from source) · ostree 2026.2 + composefs 1.0.8 (Debian packages)
-    GNOME Shell 50.3 · Docker 28.5.2 · Compose v2.40.3
+    Debian 14 (forky) · pinned kernel 7.1.13-1 (7.1.13+deb14-amd64)
+    bootc 1.16.9 (from source) · ostree 2026.4 + composefs 1.0.8 (Debian packages)
+    GNOME Shell 50.4 · Docker 28.5.2 · Compose v2.40.3
 
 It has **not** been booted on Framework hardware, and the ISO and disk-image
 paths have not been run end to end. Everything that needs a running machine —

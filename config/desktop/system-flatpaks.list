@@ -41,10 +41,14 @@ com.brave.Browser
 
 # --- Communication and PIM -------------------------------------------------
 
-# Unofficial Teams client (Microsoft ships no native Linux app). It lives in the
-# tray, which works because packages/desktop/extensions.list enables the
-# appindicator extension.
-com.github.IsmaelMartinez.teams_for_linux
+# Teams is NOT here any more. The unofficial client (Microsoft ships no native
+# Linux app) is baked into the image from upstream's .deb instead, because the
+# company video backgrounds are configured through /etc/teams-for-linux/config.json
+# and a Flatpak cannot read /etc — see docs/adr/0020-teams-for-linux-from-upstream-deb.md
+# and build/scripts/54-teams.sh. Putting the id back here would install a second
+# copy alongside it -- two launcher entries, two profiles, and the company
+# settings reaching only one of them -- so 54-teams.sh fails the build if it
+# reappears.
 
 # Evolution is here for Exchange: it is the only Linux client with working EWS
 # calendar and address-book support.
@@ -72,7 +76,12 @@ com.belmoussaoui.Decoder
 # have no CLI equivalent.
 io.dbeaver.DBeaverCommunity
 io.podman_desktop.PodmanDesktop
-sh.loft.devpod
+
+# DevPod is NOT here any more either. Flathub marked sh.loft.devpod end-of-life
+# frozen at 0.6.10 (2024-01-21) with no successor id, so it would have installed
+# and then never updated again. The image carries upstream's own .deb instead —
+# see docs/adr/0021-devpod-from-upstream-deb.md and build/scripts/51-devpod.sh.
+# 51-devpod.sh fails the build if the id reappears here.
 me.iepure.devtoolbox
 
 # Postman still targets org.freedesktop.Platform 24.08 — see the runtime note.

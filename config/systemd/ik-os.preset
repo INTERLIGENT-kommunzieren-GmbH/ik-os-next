@@ -12,6 +12,11 @@ enable ik-os-user-groups.path
 enable ik-os-homebrew.service
 enable ik-os-homebrew.path
 enable ik-os-update.timer
+# The loopback service that puts the company video backgrounds into the Teams
+# picker (ADR 0020). It is the only listening port this image adds, on
+# 127.0.0.1:8421, and Teams is useless to us without it once the Flatpak is
+# gone -- see build/scripts/54-teams.sh.
+enable ik-os-teams-backgrounds.service
 enable NetworkManager.service
 # NetworkManager owns the network (SDD §12). Debian also ships systemd-networkd
 # enabled, so both run, and network-online.target pulls in BOTH wait-online

@@ -497,6 +497,147 @@ drawio_resolves_its_libraries() {
 check "draw.io resolves its libraries"       drawio_resolves_its_libraries
 check ".drawio files have a MIME type"       bash -c 'grep -q "vnd.jgraph.mxfile" /usr/share/mime/globs2 2>/dev/null || grep -q "vnd.jgraph.mxfile" /usr/share/mime/globs'
 
+# DevPod replaces the end-of-life Flathub build with upstream's own .deb
+# (ADR 0021). It is the one vendor package that needed no relocation and no
+# rewriting -- so what these check is that it is really there and really wired
+# up, not that a workaround held.
+devpod_is_not_also_a_flatpak() {
+    local ids
+    ids=$(grep -v '^[[:space:]]*#' /usr/share/ik-os/system-flatpaks.list || true)
+    ! grep -qF 'loft.devpod' <<<"$ids"
+}
+check "DevPod is not also a Flatpak"         devpod_is_not_also_a_flatpak
+check "the DevPod desktop app is installed"  test -x "/usr/bin/DevPod Desktop"
+check "the DevPod CLI is installed"          test -x /usr/bin/devpod-cli
+# Upstream's .deb calls the CLI devpod-cli because the desktop app looks for
+# that name. Every DevPod instruction in the world says `devpod`.
+check "devpod is on PATH under its own name" bash -c '[ "$(readlink /usr/bin/devpod)" = devpod-cli ] && test -x /usr/bin/devpod'
+check "the DevPod release is recorded"       test -s /usr/share/ik-os/devpod.release
+# Not a rewrite check like draw.io's: nothing was rewritten. This is the check
+# that upstream's own launcher still points at a binary that exists, which a
+# renamed binary in a future release would silently break.
+devpod_launcher_resolves() {
+    local exec
+    exec=$(sed -nE 's/^Exec=(.*)/\1/p' /usr/share/applications/DevPod.desktop | head -1)
+    exec="${exec%% %*}"; exec="${exec%\"}"; exec="${exec#\"}"
+    test -x "/usr/bin/${exec}"
+}
+check "the DevPod launcher resolves"         devpod_launcher_resolves
+devpod_icon_exists() {
+    local icon
+    icon=$(sed -nE 's/^Icon=(.*)/\1/p' /usr/share/applications/DevPod.desktop | head -1)
+    [[ -n "$icon" ]] && compgen -G "/usr/share/icons/hicolor/*/apps/${icon}.png" >/dev/null
+}
+check "the DevPod icon is in the theme"      devpod_icon_exists
+# Tauri, not Electron: it renders through Debian's GTK3 WebKit rather than a
+# bundled Chromium, so this library must be in the image or the app dies on
+# launch with no window and no message.
+check "the GTK3 WebKit is installed"         bash -c 'ldconfig -p | grep -q libwebkit2gtk-4.1'
+devpod_resolves_its_libraries() {
+    ! ldd "/usr/bin/DevPod Desktop" 2>/dev/null | grep -q 'not found'
+}
+check "DevPod resolves its libraries"        devpod_resolves_its_libraries
+
+# Sidra ships as an upstream .deb for a blunter reason than draw.io: it is on no
+# Flatpak remote at all (ADR 0019). Same electron-builder packaging, so the same
+# three failure modes as above.
+check "Sidra is installed in /usr"           test -x /usr/lib/sidra/sidra
+check "sidra is on PATH"                     test -x /usr/bin/sidra
+check "the Sidra release is recorded"        test -s /usr/share/ik-os/sidra.release
+sidra_launcher_points_into_usr() {
+    local exec
+    exec=$(sed -nE 's/^Exec=([^ ]+).*/\1/p' /usr/share/applications/sidra.desktop | head -1)
+    [[ "$exec" == /usr/lib/sidra/sidra ]] && test -x "$exec"
+}
+check "the Sidra launcher points into /usr"  sidra_launcher_points_into_usr
+check "nothing still refers to /opt/Sidra"   bash -c '! grep -q "/opt/Sidra" /usr/share/applications/sidra.desktop'
+sidra_has_no_setuid() {
+    [[ -z "$(find /usr/lib/sidra -perm /6000 -type f 2>/dev/null)" ]]
+}
+check "no setuid bits under /usr/lib/sidra"  sidra_has_no_setuid
+check "Sidra chrome-sandbox is 0755"         bash -c '[ "$(stat -c %a /usr/lib/sidra/chrome-sandbox)" = 755 ]'
+sidra_resolves_its_libraries() {
+    ! ldd /usr/lib/sidra/sidra 2>/dev/null | grep -q 'not found'
+}
+check "Sidra resolves its libraries"         sidra_resolves_its_libraries
+
+# Teams (ADR 0020). This one was TAKEN OFF Flathub rather than never being there,
+# so the first check is that both copies are not installed at once: the Flatpak
+# and the .deb would give two launcher entries and two profiles, and only the
+# packaged one reads /etc/teams-for-linux/config.json.
+# Comments stripped first, unlike the draw.io check above: the list explains in
+# prose where Teams went, and that explanation names the id.
+teams_is_not_also_a_flatpak() {
+    local ids
+    ids=$(grep -v '^[[:space:]]*#' /usr/share/ik-os/system-flatpaks.list || true)
+    ! grep -qF 'teams_for_linux' <<<"$ids"
+}
+check "Teams is not also a Flatpak"          teams_is_not_also_a_flatpak
+check "teams-for-linux is installed in /usr" test -x /usr/lib/teams-for-linux/teams-for-linux
+check "teams-for-linux is on PATH"           test -x /usr/bin/teams-for-linux
+check "the Teams release is recorded"        test -s /usr/share/ik-os/teams-for-linux.release
+teams_launcher_points_into_usr() {
+    local exec
+    exec=$(sed -nE 's/^Exec=([^ ]+).*/\1/p' /usr/share/applications/teams-for-linux.desktop | head -1)
+    [[ "$exec" == /usr/lib/teams-for-linux/teams-for-linux ]] && test -x "$exec"
+}
+check "the Teams launcher points into /usr"  teams_launcher_points_into_usr
+check "nothing refers to /opt/teams-for-linux" bash -c '! grep -q "/opt/teams-for-linux" /usr/share/applications/teams-for-linux.desktop'
+# Upstream forces --ozone-platform=x11. Left in place the client renders through
+# XWayland: blurry on fractional scaling, and screen sharing loses the portal
+# path.
+check "Teams is not pinned to XWayland"      bash -c '! grep -q "ozone-platform=x11" /usr/share/applications/teams-for-linux.desktop'
+teams_has_no_setuid() {
+    [[ -z "$(find /usr/lib/teams-for-linux -perm /6000 -type f 2>/dev/null)" ]]
+}
+check "no setuid bits under /usr/lib/teams-for-linux" teams_has_no_setuid
+check "Teams chrome-sandbox is 0755"         bash -c '[ "$(stat -c %a /usr/lib/teams-for-linux/chrome-sandbox)" = 755 ]'
+teams_resolves_its_libraries() {
+    ! ldd /usr/lib/teams-for-linux/teams-for-linux 2>/dev/null | grep -q 'not found'
+}
+check "Teams resolves its libraries"         teams_resolves_its_libraries
+
+# The company video backgrounds. Each of these is a way for the feature to be
+# silently absent rather than visibly broken: the picker simply shows Microsoft's
+# own assets and nobody knows a background was meant to be there.
+TBG=/usr/share/ik-os/teams-backgrounds
+check "the backgrounds are installed"        bash -c '[ -n "$(find /usr/share/ik-os/teams-backgrounds -maxdepth 1 -name "*.jpg" ! -name "*-thumb.jpg" 2>/dev/null)" ]'
+check "slots.txt ships"                      test -s "${TBG}/slots.txt"
+every_background_has_a_thumbnail() {
+    local img name
+    while IFS= read -r img; do
+        name=$(basename "$img" .jpg)
+        test -s "${TBG}/${name}-thumb.jpg" || { echo "no thumbnail for ${name}"; return 1; }
+    done < <(find "$TBG" -maxdepth 1 -name '*.jpg' ! -name '*-thumb.jpg')
+}
+check "every background has a thumbnail"     every_background_has_a_thumbnail
+# A bare array, not the documented {"videoBackgroundImages": [...]} object: the
+# app iterates whatever it parses and throws "configJSON is not iterable" on the
+# object form.
+check "the manifest is a non-empty JSON array"     python3 -c 'import json;d=json.load(open("/usr/share/ik-os/teams-backgrounds/config.json"));raise SystemExit(0 if isinstance(d,list) and d else 1)'
+there_are_enough_slots() {
+    local images slots
+    images=$(find "$TBG" -maxdepth 1 -name '*.jpg' ! -name '*-thumb.jpg' | wc -l)
+    slots=$(grep -cv '^[[:space:]]*#\|^[[:space:]]*$' "${TBG}/slots.txt")
+    (( slots >= images ))
+}
+check "there is a slot for every background" there_are_enough_slots
+check "the backgrounds server is installed"  test -x /usr/libexec/ik-os/ik-os-teams-backgrounds.py
+check "the backgrounds server parses"        python3 -c 'import ast;ast.parse(open("/usr/libexec/ik-os/ik-os-teams-backgrounds.py").read())'
+check "python3 is present for it"            test -x /usr/bin/python3
+# SDD §50: this is the one listening port the image adds, and it must stay on
+# loopback. A 0.0.0.0 bind would publish the company backgrounds to the network.
+check "the server binds loopback only"       bash -c 'grep -q "^ADDRESS = (\"127.0.0.1\"" /usr/libexec/ik-os/ik-os-teams-backgrounds.py'
+check "the backgrounds unit ships"           test -f /usr/lib/systemd/system/ik-os-teams-backgrounds.service
+check "the backgrounds unit is enabled"      test -L /etc/systemd/system/multi-user.target.wants/ik-os-teams-backgrounds.service
+# Client defaults live in /usr and are copied into /etc by tmpfiles at boot, so
+# the image itself carries no /etc file to three-way merge on upgrade.
+check "the Teams defaults ship in /usr"      test -s /usr/lib/ik-os/teams-for-linux/config.json
+check "the Teams defaults are valid JSON"    python3 -c 'import json;json.load(open("/usr/lib/ik-os/teams-for-linux/config.json"))'
+check "tmpfiles places them in /etc"         bash -c 'grep -q "^C /etc/teams-for-linux/config.json" /usr/lib/tmpfiles.d/ik-os-teams-for-linux.conf'
+check "the defaults point at the service"    bash -c 'grep -q "127.0.0.1:8421" /usr/lib/ik-os/teams-for-linux/config.json'
+check "the backgrounds are documented"       test -s /usr/share/doc/ik-os/teams-backgrounds.md
+
 # Preinstalled Flatpaks (ADR 0014). A machine that cannot reach Flathub on first
 # boot still gets an app store and a task manager. Each has to be BOTH deployed
 # and exported: without the .desktop symlink the app is installed and invisible,

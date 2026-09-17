@@ -1,0 +1,35 @@
+# Microsoft background assets this image takes over, in order.
+#
+# Teams builds the background picker itself; teams-for-linux can only redirect
+# the image requests it makes. So a company background reaches the picker by
+# being served in place of one of Microsoft's own assets, listed here. The
+# images in this directory are matched to these names in sorted order, one
+# each; every other asset is proxied straight through to Microsoft's CDN, which
+# is why the rest of the picker still looks normal.
+#
+# There must be at least as many names as images or the build fails. Add spares
+# to the bottom when adding images. Every name below was observed being
+# requested by a running Teams client on 2026-09-16; if Microsoft retires one,
+# the image mapped to it silently stops appearing — replace that line with a
+# name from the journal of ik-os-teams-backgrounds.service, which logs every
+# asset it proxies.
+#
+# See docs/adr/0020-teams-for-linux-from-upstream-deb.md.
+
+teamsBackgroundContemporaryOffice01
+teamsBackgroundContemporaryOffice02
+teamsBackgroundContemporaryOffice03
+teamsBackgroundTraditionalOffice01
+teamsBackgroundHome
+teamsBackgroundBeach
+teamsBackgroundEarthDay
+
+# --- spares, unused until more images are added -----------------------------
+senseOfBelonging1
+senseOfBelonging2
+senseOfBelonging3
+senseOfBelonging4
+inTheZone1
+inTheZone2
+inTheZone3
+inTheZone4

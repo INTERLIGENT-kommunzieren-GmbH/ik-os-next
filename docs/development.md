@@ -17,6 +17,9 @@
     just check-packages       # every package list resolves against the archive
     just check-flatpaks       # every Flatpak resolves on Flathub
     just check-brewfile       # every formula and cask resolves
+    just check-devpod         # the DevPod pin, and whether upstream still ships
+    just check-sidra          # the Sidra pin against upstream
+    just check-teams          # the Teams pin, its backgrounds, and one Teams only
     just check                # Justfile formatting
 
 `just check-packages` runs in seconds and catches the most common breakage — a
@@ -383,11 +386,26 @@ unit name has changed between LsAgent versions (`ls-agent.service`,
 `LansweeperAgentService`), so every place that touches it resolves the name at
 runtime rather than hardcoding one.
 
-### draw.io is not a Flatpak, and nothing updates it for you
+### Four applications are not Flatpaks, and nothing updates them for you
 
-Every other GUI application comes from Flathub. draw.io is the one exception
-(ADR 0016): its Flathub package went end-of-life frozen at 30.0.4 while upstream
-kept shipping, so the image installs a pinned upstream `.deb` instead.
+Most GUI applications come from Flathub. Four do not, and each unpacks a
+pinned upstream `.deb` instead:
+
+| | why | pin | updater |
+| --- | --- | --- | --- |
+| draw.io | Flathub package end-of-life at 30.0.4 while upstream kept shipping (ADR 0016) | `drawio.env` | `update-drawio.sh` |
+| DevPod | Flathub package end-of-life at 0.6.10; upstream's own newest stable is 0.6.15 and over a year old (ADR 0021) | `devpod.env` | `update-devpod.sh` |
+| Sidra | on no Flatpak remote at all (ADR 0019) | `sidra.env` | `update-sidra.sh` |
+| Teams | a Flatpak cannot read `/etc/teams-for-linux/config.json` (ADR 0020) | `teams-for-linux.env` | `update-teams-for-linux.sh` |
+
+draw.io is the one the rest of this section uses as its example, because it came
+first and Sidra and teams-for-linux copy it almost line for line. DevPod is the
+odd one out and much simpler: its payload is already a `/usr` tree, it ships no
+maintainer scripts, and its launcher is left exactly as upstream wrote it (both
+binaries have a space in the name, and the desktop entry is consistent about
+it). What `51-devpod.sh` adds is a `/usr/bin/devpod` symlink to the
+`devpod-cli` the `.deb` installs, and one dependency: DevPod is Tauri rather
+than Electron, so it renders through Debian's GTK3 WebKit.
 
 The consequence is that no update mechanism reaches it. Flathub does not, `apt`
 does not, and the image ships whatever `config/desktop/drawio.env` pins. To move
@@ -410,3 +428,71 @@ can create a user namespace — which always fails in a rootless build container
 so running it would bake a setuid binary into the image based on how the image
 was built. That is why maintainer scripts are skipped (ADR 0008), and the build
 asserts afterwards that no setuid bit survived.
+
+DevPod is the one to keep questioning rather than updating: `just check-devpod`
+warns when upstream's newest stable release is over a year old, which it is
+today. Replacing an end-of-life Flatpak with a `.deb` nobody ships either is not
+a fix, and ADR 0021 says what to do about it.
+
+Teams is the one to keep an eye on. It used to update itself from Flathub and no
+longer does, and it is a chat client rendering untrusted content in its own
+bundled Chromium. `just check-teams` warns when upstream is ahead.
+
+Two details specific to the other two. Sidra's payload arrives at **0775**, not
+0755 like draw.io's, so `53-sidra.sh` sets the mode rather than only asserting
+it — the group-write bit is stripped from the whole tree at the same time.
+teams-for-linux bundles **musl** builds of a native node module beside the glibc
+ones (`node.abi137.musl.node`), which can never resolve `libc.so` here and are
+not meant to; `54-teams.sh` skips those in its `ldd` sweep, but only when the
+glibc sibling is actually present.
+
+### The Teams video backgrounds
+
+Teams builds its background picker itself and offers no way to add to it. What
+`teams-for-linux` can do is redirect every image request the picker makes, so a
+company background gets in by being served **in place of** one of Microsoft's
+own assets — the names in `branding/teams-backgrounds/slots.txt`, paired with
+the images in sorted order. `ik-os-teams-backgrounds.service` on
+`127.0.0.1:8421` answers those and proxies everything else back to Microsoft's
+CDN; without the proxy the redirect turns every unclaimed tile into an empty
+box.
+
+Adding one:
+
+    scripts/maintenance/render-teams-backgrounds.sh ~/Pictures/ik-kitchen.png
+
+That writes the 1920x1080 background and the 280x158 thumbnail into
+`branding/teams-backgrounds/`. They are committed already rendered because
+resizing during the build would mean shipping ImageMagick in every image for a
+step that runs once per photograph. Each image consumes one Microsoft asset
+name, so add a spare to `slots.txt` when they run out — the build fails rather
+than install an image that can never be seen.
+
+When a background stops appearing, Microsoft retired the name it was mapped to.
+The service logs every asset the client asks for, marked `ik` (served from the
+image) or `ms` (proxied):
+
+    journalctl -u ik-os-teams-backgrounds
+
+Pick a live name from that log and replace the dead line in `slots.txt`.
+
+Two behaviours of the client are load-bearing and easy to break by tidying:
+every response must carry `Access-Control-Allow-Origin` (the picker draws the
+image into a canvas and otherwise silently refuses to apply it, logging
+nothing), and the manifest must be a bare JSON **array** — the documented
+`{"videoBackgroundImages": [...]}` object makes the app throw *"configJSON is
+not iterable"*.
+
+Finally, one note about installs rather than builds. Nothing is deployed from
+this image yet, so no machine is holding the Flatpak that the packaged client
+replaces. A Bluefin machine migrated with `ik-os-migrate` is the exception: it
+runs `bootc install to-existing-root`, which leaves `/var` alone — that is what
+preserves `/home` — so anything already in `/var/lib/flatpak` comes through the
+migration. First boot will not reinstall Teams, because the id is out of
+`system-flatpaks.list`, but it will not remove a surviving copy either, and two
+Teams in the launcher is the visible symptom:
+
+    flatpak uninstall --system com.github.IsmaelMartinez.teams_for_linux
+
+The profile moves too, from `~/.var/app/…/config/teams-for-linux` to
+`~/.config/teams-for-linux`; copy it across to keep the session.

@@ -51,7 +51,12 @@ Booted-system suites live in `tests/`; run a single one directly, e.g.
   `output_matches` / `output_matches_fixed` from `lib.sh`.
 - Every package needs a justification comment (Rule 11). Prefer not adding one:
   GUI apps go to Flatpak, CLI tools to Homebrew, project dependencies to
-  containers (SDD §54).
+  containers (SDD §54). Four applications are baked in instead, each with an ADR
+  (0007, 0016, 0019, 0020). A fifth needs its own, and the first question is the
+  one ADR 0016 closes with: is the Flatpak *missing*, or merely *inconvenient*?
+- Python is not a scripting language here; the one exception is
+  `scripts/desktop/ik-os-teams-backgrounds.py`, which serves the Teams
+  backgrounds. `just lint` and CI skip `*.py` because shellcheck cannot read it.
 - Shellcheck must be clean at warning level. Suppressions carry a reason.
 
 ## Non-negotiables

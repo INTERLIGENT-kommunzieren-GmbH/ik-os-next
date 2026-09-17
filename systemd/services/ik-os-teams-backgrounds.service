@@ -1,0 +1,47 @@
+[Unit]
+Description=Company video backgrounds for Microsoft Teams
+Documentation=https://github.com/INTERLIGENT-kommunzieren-GmbH/ik-os-next
+Documentation=file:/usr/share/doc/ik-os/teams-backgrounds.md
+# teams-for-linux redirects every Teams background-image request to this
+# service (customBGServiceBaseUrl in /etc/teams-for-linux/config.json). It
+# serves the company images in place of the Microsoft assets named in
+# slots.txt and proxies the rest, so the picker stays intact (ADR 0020).
+After=network.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 -u /usr/libexec/ik-os/ik-os-teams-backgrounds.py
+Restart=on-failure
+RestartSec=2
+
+# SDD §50 — the one listening port this image adds, and it is bound to
+# 127.0.0.1 in the script. Nothing here needs an identity, a writable
+# filesystem or any capability: it reads company images out of /usr and
+# fetches from one CDN.
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+# AF_INET/AF_INET6 for the loopback socket and the CDN fetch. AF_UNIX is here
+# for name resolution, not for a socket of our own: /etc/nsswitch.conf puts
+# `resolve` in the hosts line (65-printing.sh) and nss-resolve reaches
+# systemd-resolved over a varlink socket in /run. Without AF_UNIX that lookup
+# fails as UNAVAIL and falls through to the 127.0.0.53 stub, which happens to
+# work — proxying Microsoft's own assets would then depend on a fallback
+# nobody chose.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

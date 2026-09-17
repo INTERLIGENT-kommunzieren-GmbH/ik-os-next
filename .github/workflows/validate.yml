@@ -26,10 +26,13 @@ jobs:
               # config/network holds the NetworkManager dispatcher hook, whose
               # filename NM dictates (50-ik-os-lansweeper) -- it matches neither
               # *.sh nor ik-os-*, so it needs its own clause or it is never linted.
+              # *.py is excluded for the same kind of reason in reverse:
+              # scripts/desktop/ik-os-teams-backgrounds.py matches ik-os-* but is
+              # Python, and shellcheck errors out (SC1071) on its shebang.
               find build scripts migration iso tests config/network -type f \
                    \( -name '*.sh' -o -name 'ik-os' -o -name 'ik-os-*' \
                       -o -name '[0-9][0-9]-ik-os-*' \) \
-                   ! -name '*.service' | sort
+                   ! -name '*.service' ! -name '*.py' | sort
           )
           (( ${#files[@]} )) || { echo "::error::no scripts found"; exit 1; }
           printf '  %s\n' "${files[@]}"
@@ -73,6 +76,31 @@ jobs:
       # Warns rather than fails: upstream releases every few days.
       - name: Check the pinned draw.io release against upstream
         run: REPO="$GITHUB_WORKSPACE" bash build/validation/check-drawio.sh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # DevPod's Flatpak went end-of-life, so the image carries upstream's .deb
+      # (ADR 0021). This also warns when upstream's newest stable release is
+      # more than a year old -- replacing a frozen Flatpak with a frozen .deb
+      # would be no improvement, and that is a decision, not a version bump.
+      - name: Check the DevPod pin and upstream's release cadence
+        run: REPO="$GITHUB_WORKSPACE" bash build/validation/check-devpod.sh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Sidra is on no Flatpak remote at all (ADR 0019), so the same applies:
+      # nothing but the pin moves it, and it is an Electron app.
+      - name: Check the pinned Sidra release against upstream
+        run: REPO="$GITHUB_WORKSPACE" bash build/validation/check-sidra.sh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Teams was TAKEN OFF Flathub (ADR 0020), so this one also fails — not
+      # just warns — when the id creeps back into the list or a background is
+      # missing its thumbnail. Both are repository state, wrong now and cheap to
+      # fix now, and both otherwise surface twenty minutes into an image build.
+      - name: Check the Teams pin, backgrounds and Flatpak removal
+        run: REPO="$GITHUB_WORKSPACE" bash build/validation/check-teams-for-linux.sh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

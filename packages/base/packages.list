@@ -89,6 +89,11 @@ wireless-regdb
 iproute2
 iputils-ping
 openssh-client
+# ik-os-teams-backgrounds.service is written in Python (ADR 0020). python3 is
+# already pulled in as a dependency -- firewalld is a Python program -- but a
+# service whose ExecStart depends on somebody else's Depends is one package
+# removal away from a unit that fails at boot with "No such file or directory".
+python3
 
 ## --- security (SDD §50) ---------------------------------------------------
 apparmor
