@@ -217,8 +217,29 @@ jobs:
       # syft cannot read podman's local storage. Its podman provider talks to the
       # podman API socket, which a GitHub runner does not have, so a bare
       # `ik-os:testing` falls through every other provider and ends up asking
-      # Docker Hub for library/ik-os. Export the image and scan the archive
+      # Docker Hub for library/ik-os. Export the image and scan the export
       # instead: no daemon, no registry, no credentials.
+      #
+      # The export is an OCI layout DIRECTORY, not an oci-archive tarball, and
+      # that distinction is load-bearing. syft's image layer (stereoscope)
+      # unpacks an oci-archive to a temp directory first, and that unpack applies
+      # a 2 GiB per-entry decompression-bomb limit (pkg/file/tarutil.go). Each
+      # layer blob is one entry in that outer tar, so the largest layer is
+      # measured against the limit as a single file — and it crossed once Sidra,
+      # Teams and DevPod were vendored into the image:
+      #
+      #   zip read limit hit (potential decompression bomb attack):
+      #   copied 2147483648, limit 2147483648
+      #
+      # That blob was already 1.795 GiB two weeks earlier, so the ceiling was
+      # always going to be reached; the vendored applications only decided when.
+      # There is no knob to raise it — stereoscope exposes SetPerFileReadLimit to
+      # Go callers and syft does not surface it. The oci-dir provider reads the
+      # layout in place via go-containerregistry and never unpacks the outer
+      # container, so the limit is not in the path at all. Verified equivalent on
+      # the same image before switching: 5384 packages from either source, the
+      # only difference being the name syft gives the source artifact. It also
+      # writes the image once instead of twice.
       - name: Install syft
         run: |
           # Downloaded then run, not piped into sh: a pipeline hides curl's exit
@@ -230,18 +251,36 @@ jobs:
 
       - name: Generate SBOM
         run: |
+          layout="${RUNNER_TEMP}/ik-os-oci-layout"
           echo "disk before export:"; df -h / | tail -1
-          podman save --format oci-archive \
-            -o "${RUNNER_TEMP}/ik-os.oci" "${IMAGE_NAME}:${CHANNEL}"
-          ls -lh "${RUNNER_TEMP}/ik-os.oci"
+          podman save --format oci-dir -o "${layout}" "${IMAGE_NAME}:${CHANNEL}"
+          du -sh "${layout}"
+          # Reported on every build because the 2 GiB per-entry limit described
+          # above is invisible until it is crossed. This is the number that says
+          # how much headroom the image has left, and the first line of the
+          # answer if a future syft or cosign step starts refusing the layers.
+          echo "largest layer blob:"
+          ls -lS "${layout}/blobs/sha256" | awk 'NR==2 {print $5, "bytes", $9}'
           echo "disk after export:"; df -h / | tail -1
-          syft scan "oci-archive:${RUNNER_TEMP}/ik-os.oci" -o spdx-json > ik-os.spdx.json
+          syft scan "oci-dir:${layout}" -o spdx-json > ik-os.spdx.json
           # Reclaimed before the push, which needs the room more than this does.
-          rm -f "${RUNNER_TEMP}/ik-os.oci"
+          rm -rf "${layout}"
           test -s ik-os.spdx.json
           # jq, not grep: "SPDXRef-Package" also appears in every relationship
           # entry, which overcounts by ~60x (5014 vs 85 on a test image).
-          echo "SBOM: $(wc -c < ik-os.spdx.json) bytes, $(jq '.packages | length' ik-os.spdx.json) packages"
+          sbom_packages=$(jq '.packages | length' ik-os.spdx.json)
+          echo "SBOM: $(wc -c < ik-os.spdx.json) bytes, ${sbom_packages} packages"
+          # `test -s` passes on an SBOM that silently lost the dpkg cataloger,
+          # which is the failure that matters: a release would ship an SBOM that
+          # omits the OS. Every dpkg package must at least be accounted for.
+          # syft finds those plus binaries and bundled ecosystems (5384 against
+          # 984 dpkg packages on the image this change was measured against), so
+          # the floor is generous and only trips on a genuinely broken scan.
+          dpkg_packages=$(wc -l < packages.manifest)
+          if [[ "${sbom_packages}" -lt "${dpkg_packages}" ]]; then
+            echo "::error::SBOM lists ${sbom_packages} packages, fewer than the ${dpkg_packages} dpkg packages in the image"
+            exit 1
+          fi
           echo "disk after cleanup:"; df -h / | tail -1
 
       - name: Upload build metadata
