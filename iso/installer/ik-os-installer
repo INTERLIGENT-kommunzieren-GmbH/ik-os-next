@@ -96,9 +96,9 @@ fi
 whiptail --title "ik-os uses the whole disk" --defaultno --yesno \
 "ik-os will use the whole of ${TARGET} (${TARGET_HUMAN}).
 
-It cannot share this disk with another operating system, and it cannot be
-installed into free space or an existing partition. The entire disk is
-repartitioned and encrypted.
+It cannot share this disk with another operating system, and cannot
+be installed into free space or an existing partition. The entire
+disk is repartitioned and encrypted.
 
 Use the whole of ${TARGET}?" 18 74 || die \
 "Installation cancelled: ik-os can only be installed on a whole disk.
