@@ -43,7 +43,10 @@ fi
 #
 # Verified to be a real check rather than a tautology: the initramfs built
 # before the crypt modules were added contains no cryptsetup at all.
-if ! output_matches 'cryptsetup' lsinitrd "/usr/lib/modules/${KVER}/initramfs.img"; then
+# 'systemd-cryptsetup', not plain 'cryptsetup': the latter also matches
+# libcryptsetup.so, which is pulled in by unrelated packages and would make
+# this pass on an initramfs that cannot unlock anything.
+if ! output_matches 'systemd-cryptsetup' lsinitrd "/usr/lib/modules/${KVER}/initramfs.img"; then
     die "the generated initramfs cannot unlock LUKS: no cryptsetup inside it.
        Every ik-os install is encrypted (ADR 0022), so this image would
        install and then fail to boot. Check that the crypt and

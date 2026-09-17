@@ -66,7 +66,14 @@ fdisk                   # sfdisk. Debian splits it out of util-linux, and
                         # the target — without it installation fails at the
                         # very first step. Filesystem growth needs no extra
                         # package: systemd-growfs handles it.
-cryptsetup
+cryptsetup              # the installer's LUKS2 container (ADR 0022), and the
+                        # cryptsetup binary the dracut crypt module needs
+systemd-cryptsetup      # /usr/lib/systemd/systemd-cryptsetup, which Debian
+                        # splits out of systemd. The dracut systemd-cryptsetup
+                        # module is what honours rd.luks.uuid= in a
+                        # systemd initramfs, and without this package dracut
+                        # refuses to build at all: "Module
+                        # 'systemd-cryptsetup' cannot be installed."
 
 ## --- networking -----------------------------------------------------------
 network-manager
