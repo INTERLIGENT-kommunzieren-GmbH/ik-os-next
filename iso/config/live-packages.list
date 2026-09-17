@@ -26,6 +26,10 @@ gdisk
 btrfs-progs
 e2fsprogs
 dosfstools
+# The installer creates the LUKS container itself (ADR 0022), so the live
+# system needs cryptsetup. Without it the installer would fail after the
+# partition table is already written -- past the point of no return.
+cryptsetup
 util-linux
 kmod
 less

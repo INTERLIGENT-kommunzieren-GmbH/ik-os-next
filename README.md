@@ -43,11 +43,17 @@ See [`docs/development.md`](docs/development.md).
 
 ## Install it
 
-**New machine:** boot the installer ISO from the latest release.
+**New machine:** boot the installer ISO from the latest release. It takes the
+whole disk and encrypts it — LUKS2, passphrase chosen during installation and
+asked for at every boot ([ADR 0022](docs/adr/0022-full-disk-encryption.md)).
+There is no unencrypted install and no recovery key: a lost passphrase is a
+lost disk. Disks under 32 GiB are refused, because first boot needs about
+23 GiB for the deployment and the approved applications.
 
 **Existing Bluefin machine:** `ik-os-migrate` — it preserves `/home`. See
 [`docs/migration.md`](docs/migration.md). Do not use the ISO for this; it wipes
-the disk.
+the disk. Note that migration cannot encrypt a disk underneath a running
+system, so a migrated machine stays unencrypted until it is reinstalled.
 
 ## Applications not from Flathub
 

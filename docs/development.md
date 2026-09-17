@@ -442,6 +442,56 @@ line-drawing correctly in UTF-8 and 8-bit mode, so whiptail was never
 mis-drawing; and the live system has no locale set at all (`LC_CTYPE=POSIX`),
 which is untidy but did not affect drawing in testing.
 
+### The installer partitions the disk, because bootc will not encrypt it
+
+Every install is encrypted: LUKS2, passphrase, whole disk, no unencrypted path
+(ADR 0022). That moves partitioning out of bootc and into
+`iso/installer/ik-os-installer`, so the installer is no longer the thin wrapper
+it used to be.
+
+`bootc install to-disk` cannot do it. Its `--block-setup` takes only `direct`
+or `tpm2-luks`, and `tpm2-luks` opens the disk whenever it is in that machine,
+with no passphrase asked. bootc's help sends LUKS layouts to
+`install to-filesystem`, so the installer builds the layout and bootc deploys
+into it:
+
+    GPT
+      p1  1024 MiB  ESP, FAT32, mounted at <root>/boot/efi
+      p2  rest      LUKS2 -> btrfs, mounted at <root>
+
+Both of those numbers come from bootc, not from taste. 1024 MiB is
+`CFS_EFIPN_SIZE_MB`, the ESP size bootc's own composefs installs use;
+`boot/efi` is `bootloader::EFI_DIR` joined to `boot`, which is where bootc
+looks for the ESP. Change either and the deployment either cramps itself or is
+not found. There is no BIOS boot partition — ik-os is UEFI only and the
+installer refuses to run otherwise.
+
+The initramfs is told to unlock with `--karg rd.luks.uuid=<uuid>`; `root=` is
+left to bootc, which writes the btrfs UUID, so nothing depends on the name the
+unlocked mapper gets. `config/boot/dracut-ik-os.conf` carries `crypt`,
+`systemd-cryptsetup` and `plymouth` for the themed prompt — all three modules
+were already in the image and simply unused, so this cost no packages.
+
+**The trap, if you touch this code.** The passphrase is piped in with
+`printf '%s'`, with no trailing newline, because `--key-file -` takes the bytes
+it reads as the key verbatim. Use `echo` and the newline becomes part of the
+key, so the boot prompt — which sends only what was typed — can never open the
+disk. It installs cleanly and fails at first boot, on someone else's machine.
+
+**Testing it without an ISO.** The script can be driven under stubbed
+`sgdisk`, `cryptsetup`, `mkfs.*`, `mount` and `bootc` to check the gates, the
+message wording and the exact commands it builds, including the byte length of
+the key handed to `luksFormat`. That covers everything except the part that
+matters most — whether the result boots — which needs an ISO and a VM, because
+stubs create no LUKS container and never run an initramfs.
+
+Disks are also size-checked now, from measurement rather than guesswork: the
+deployment is 12 GiB and the approved Flatpaks are about 10.2 GiB (5.6 GiB of
+applications plus 4.5 GiB of the five runtimes they share), so anything under
+32 GiB is refused and anything under 128 GiB warns. A 24 GiB VM disk installed
+fine and then died at application group 5 of 7 with `No space left on device`,
+which is the failure this replaces.
+
 ### Four applications are not Flatpaks, and nothing updates them for you
 
 Most GUI applications come from Flathub. Four do not, and each unpacks a

@@ -87,6 +87,9 @@ KVER=$(find /usr/lib/modules -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | so
 check "kernel present (${KVER})"             test -f "/usr/lib/modules/${KVER}/vmlinuz"
 check "initramfs present"                    test -s "/usr/lib/modules/${KVER}/initramfs.img"
 check "branding is inside the initramfs"     bash -c "lsinitrd /usr/lib/modules/${KVER}/initramfs.img 2>/dev/null | grep -q watermark"
+# Every install is encrypted (ADR 0022); an initramfs without cryptsetup
+# installs cleanly and then cannot find its root filesystem.
+check "initramfs can unlock LUKS"            bash -c "lsinitrd /usr/lib/modules/${KVER}/initramfs.img 2>/dev/null | grep -q cryptsetup"
 check "kargs enable the boot splash"         bash -c 'grep -q "\"splash\"" /usr/lib/bootc/kargs.d/10-ik-os.toml'
 check "/boot is empty"                       test -z "$(ls -A /boot)"
 check "no dangling kernel symlinks at /"     bash -c '! test -e /vmlinuz -o -L /vmlinuz -o -L /initrd.img'

@@ -58,6 +58,16 @@ Docker's internal state is never copied between Fedora and Debian (SDD §25,
 §32). Images and containers are cheap to recreate; volumes are exported as tar
 archives rather than moved as raw storage.
 
+**Not encrypted.** The ISO installs onto a LUKS2 container with a passphrase
+([ADR 0022](adr/0022-full-disk-encryption.md)); migration cannot. Encryption
+has to exist underneath a filesystem before that filesystem holds anything, and
+migration deliberately leaves `/var` in place — which is exactly what preserves
+`/home`. So a migrated machine keeps whatever encryption it already had, which
+for a stock Bluefin install is none, and the only route to an encrypted disk is
+a reinstall from the ISO with `/home` restored from backup afterwards. Worth
+deciding before migrating rather than after: a machine that migrates today is a
+machine that has to be reinstalled later if encryption becomes mandatory.
+
 ## The desktop is not imported wholesale (SDD §34)
 
 Personal preferences migrate; Bluefin's GNOME *system* configuration does not.

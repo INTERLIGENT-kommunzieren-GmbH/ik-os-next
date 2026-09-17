@@ -2,7 +2,9 @@
 # ik-os installer (SDD §36).
 #
 # Runs in the live environment and installs the ik-os image carried on the
-# medium. Deliberately small: partitioning and deployment are bootc's job.
+# medium. Deployment is bootc's job; partitioning and the LUKS container are
+# this script's, because bootc's to-disk path cannot make a passphrase-unlocked
+# root (ADR 0022).
 set -euo pipefail
 
 MEDIUM=/run/live/medium
@@ -51,6 +53,61 @@ TARGET=$(whiptail --title "ik-os installer" \
     --menu "Select the disk to install ik-os on.\n\nEverything on the selected disk will be erased." \
     20 76 8 "${MENU[@]}" 3>&1 1>&2 2>&3) || exit 1
 
+# --- size ------------------------------------------------------------------
+# A disk that is merely too small must be refused here, not discovered halfway
+# through first boot. Measured on a 24 GiB VM disk: the deployment takes 12 GiB
+# and the approved Flatpak set another ~10.2 GiB (5.6 GiB of applications plus
+# 4.5 GiB of the five runtimes they share), so provisioning ran out of space at
+# application group 5 of 7 and left a half-provisioned system with no warning.
+#
+# MIN is the smallest disk on which first boot can finish with room to spare.
+# RECOMMENDED is about the point where Docker images, Homebrew and real work
+# fit too; below it the install proceeds, but only after saying so. Framework
+# hardware ships well above both, so in practice this only speaks up in VMs.
+MIN_DISK_BYTES=$(( 32 * 1024 * 1024 * 1024 ))
+RECOMMENDED_DISK_BYTES=$(( 128 * 1024 * 1024 * 1024 ))
+TARGET_BYTES=$(blockdev --getsize64 "$TARGET" 2>/dev/null || echo 0)
+TARGET_HUMAN=$(numfmt --to=iec-i --suffix=B "$TARGET_BYTES" 2>/dev/null || echo "${TARGET_BYTES} bytes")
+
+if (( TARGET_BYTES < MIN_DISK_BYTES )); then
+    die "${TARGET} is ${TARGET_HUMAN}, which is too small for ik-os.
+
+The deployment needs about 12 GiB and the approved applications about
+10 GiB more, so an install on this disk would fail partway through the
+first boot. ik-os requires at least $(numfmt --to=iec-i --suffix=B "$MIN_DISK_BYTES") and expects $(numfmt --to=iec-i --suffix=B "$RECOMMENDED_DISK_BYTES")."
+fi
+
+if (( TARGET_BYTES < RECOMMENDED_DISK_BYTES )); then
+    whiptail --title "${TARGET} is small" --defaultno --yesno \
+"${TARGET} is ${TARGET_HUMAN}. ik-os installs and boots at this size, but
+after the deployment and the approved applications there is little left
+for container images, Homebrew and your own files.
+
+$(numfmt --to=iec-i --suffix=B "$RECOMMENDED_DISK_BYTES") or more is expected on a workstation.
+
+Install anyway?" 18 74 || exit 1
+fi
+
+# --- whole disk only -------------------------------------------------------
+# ik-os takes the entire disk: it is an image-based system whose partitioning,
+# ESP and bootloader are bootc's, and it has no supported layout that shares a
+# disk with another operating system. Asking plainly is better than discovering
+# it after the partition table is gone.
+whiptail --title "ik-os uses the whole disk" --defaultno --yesno \
+"ik-os will use the whole of ${TARGET} (${TARGET_HUMAN}).
+
+It cannot share this disk with another operating system, and it cannot be
+installed into free space or an existing partition. The entire disk is
+repartitioned and encrypted.
+
+Use the whole of ${TARGET}?" 18 74 || die \
+"Installation cancelled: ik-os can only be installed on a whole disk.
+
+Nothing has been changed. If this machine must keep another operating
+system, install ik-os on a different disk. If you are replacing an
+existing ik-os or Bluefin workstation and want to keep /home, use
+'ik-os-migrate' from the running system instead."
+
 # --- explicit destructive confirmation (SDD §36) ---------------------------
 SUMMARY=$(lsblk -no NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT "$TARGET" | sed 's/^/  /')
 whiptail --title "Erase ${TARGET}?" --defaultno --yesno \
@@ -69,6 +126,41 @@ CONFIRM=$(whiptail --title "Confirm" --inputbox \
 "Type ERASE to confirm that ${TARGET} may be wiped." 10 70 3>&1 1>&2 2>&3) || exit 1
 [[ "$CONFIRM" == "ERASE" ]] || die "Confirmation did not match. Nothing was changed."
 
+# --- disk encryption passphrase (ADR 0022) ---------------------------------
+# Every ik-os install is encrypted; there is no unencrypted path. The
+# passphrase is collected before anything is written, so cancelling here still
+# leaves the disk untouched.
+#
+# whiptail returns the passphrase on file descriptor 3, so it never appears in
+# a command line or in the process table.
+MIN_PASSPHRASE=12
+while :; do
+    PASSPHRASE=$(whiptail --title "Disk encryption" --passwordbox \
+"${TARGET} will be encrypted. Choose the passphrase that unlocks it.
+
+This passphrase is required at every boot, before the system starts.
+Nothing else can unlock the disk: there is no recovery key and no copy
+held anywhere, so if it is lost the data is gone.
+
+At least ${MIN_PASSPHRASE} characters." 16 74 3>&1 1>&2 2>&3) || exit 1
+
+    PASSPHRASE_AGAIN=$(whiptail --title "Disk encryption" --passwordbox \
+"Type the same passphrase again." 9 74 3>&1 1>&2 2>&3) || exit 1
+
+    if [[ "$PASSPHRASE" != "$PASSPHRASE_AGAIN" ]]; then
+        whiptail --title "Disk encryption" --msgbox \
+"The two entries did not match. Try again." 9 60
+        continue
+    fi
+    if (( ${#PASSPHRASE} < MIN_PASSPHRASE )); then
+        whiptail --title "Disk encryption" --msgbox \
+"That passphrase is ${#PASSPHRASE} characters. At least ${MIN_PASSPHRASE} are required." 9 66
+        continue
+    fi
+    break
+done
+unset PASSPHRASE_AGAIN
+
 # --- install ---------------------------------------------------------------
 clear
 echo "Installing ik-os on ${TARGET}..."
@@ -76,33 +168,107 @@ echo "Source: ${PAYLOAD}"
 echo "Target reference: ${TARGET_REF}"
 echo
 
-# bootc owns partitioning, the ESP, the bootloader and the deployment.
-if bootc install to-disk \
+# Past this line the disk is being rewritten, so a failure cannot claim that
+# nothing was changed. An ERR trap reports it rather than letting set -e exit
+# silently behind whiptail, which would leave the operator staring at a
+# half-written disk with no message.
+MAPPER=ik-os-root
+MNT=/run/ik-os-install-target
+installation_failed() {
+    umount -R "$MNT" 2>/dev/null || true
+    cryptsetup close "$MAPPER" 2>/dev/null || true
+    die "Installation failed and ${TARGET} is now partly written, so it will
+not boot. Nothing outside ${TARGET} was touched.
+
+Run 'journalctl -b' in the live shell (Alt+F2) for details, then start
+the installer again to retry from a clean disk."
+}
+trap installation_failed ERR
+
+# ik-os is UEFI only (SDD §5, enforced above), so the layout is just the ESP
+# and the encrypted root -- no BIOS boot partition. 1024 MiB matches the ESP
+# size bootc itself uses for composefs installs (CFS_EFIPN_SIZE_MB), so the
+# deployment has the room its own to-disk path would have given it.
+echo "Partitioning ${TARGET}..."
+sgdisk --zap-all "$TARGET"
+sgdisk -n 1:0:+1024M -t 1:ef00 -c 1:EFI-SYSTEM "$TARGET"
+sgdisk -n 2:0:0      -t 2:8304 -c 2:ik-os-luks "$TARGET"
+udevadm settle
+
+# nvme0n1 takes partitions as nvme0n1p1, sda as sda1.
+partition_of() {
+    if [[ "$1" =~ [0-9]$ ]]; then echo "${1}p${2}"; else echo "${1}${2}"; fi
+}
+ESP_DEV=$(partition_of "$TARGET" 1)
+LUKS_DEV=$(partition_of "$TARGET" 2)
+for _ in $(seq 100); do
+    [[ -b "$ESP_DEV" && -b "$LUKS_DEV" ]] && break
+    sleep 0.1
+done
+[[ -b "$ESP_DEV" ]]  || die "${ESP_DEV} did not appear after partitioning ${TARGET}."
+[[ -b "$LUKS_DEV" ]] || die "${LUKS_DEV} did not appear after partitioning ${TARGET}."
+
+echo "Creating the EFI system partition..."
+mkfs.fat -F32 -n EFI-SYSTEM "$ESP_DEV"
+
+# printf '%s' deliberately emits no trailing newline. With `--key-file -`
+# cryptsetup takes the bytes it reads as the passphrase verbatim, so a newline
+# here would be part of the key -- and the prompt at boot, which sends only
+# what was typed, could then never open the disk.
+echo "Encrypting ${LUKS_DEV}..."
+printf '%s' "$PASSPHRASE" | cryptsetup luksFormat --type luks2 --batch-mode \
+    --key-file - "$LUKS_DEV"
+# --persistent records --allow-discards in the LUKS2 header, so TRIM reaches
+# the SSD on every boot without a kernel argument to carry it. The trade-off is
+# that the amount of used space in the container becomes visible to someone
+# with the raw device; for a company laptop that is worth the drive's lifetime.
+printf '%s' "$PASSPHRASE" | cryptsetup open --allow-discards --persistent \
+    --key-file - "$LUKS_DEV" "$MAPPER"
+unset PASSPHRASE
+
+LUKS_UUID=$(cryptsetup luksUUID "$LUKS_DEV")
+
+echo "Creating the root filesystem..."
+mkfs.btrfs -L ik-os-root "/dev/mapper/${MAPPER}"
+mkdir -p "$MNT"
+mount "/dev/mapper/${MAPPER}" "$MNT"
+mkdir -p "${MNT}/boot/efi"
+mount "$ESP_DEV" "${MNT}/boot/efi"
+
+# to-filesystem rather than to-disk: to-disk's --block-setup offers only
+# `direct` and `tpm2-luks`, and bootc's own help sends LUKS layouts here. The
+# root filesystem is mounted at $MNT with the ESP at $MNT/boot/efi, which is
+# where bootc looks for it (bootloader::EFI_DIR).
+#
+# rd.luks.uuid is what tells the initramfs there is a container to unlock at
+# all; without it the kernel finds no root and drops to an emergency shell.
+# root= is left to bootc, which writes the btrfs UUID -- stable regardless of
+# what the unlocked mapper ends up being called.
+echo "Deploying ik-os..."
+bootc install to-filesystem \
         --source-imgref "oci:${PAYLOAD}:ik-os" \
         --target-imgref "${TARGET_REF}" \
-        --wipe \
-        --filesystem btrfs \
+        --karg "rd.luks.uuid=${LUKS_UUID}" \
         "${INSTALL_FLAGS[@]}" \
-        "$TARGET"; then
-    STATUS=ok
-else
-    STATUS=failed
-fi
+        "$MNT"
 
-if [[ "$STATUS" == "failed" ]]; then
-    die "Installation failed. The system was not modified beyond ${TARGET}.
-Run 'journalctl -b' in the live shell for details."
-fi
+trap - ERR
+umount -R "$MNT" 2>/dev/null || true
+cryptsetup close "$MAPPER" 2>/dev/null || true
 
 whiptail --title "ik-os installed" --msgbox \
-"ik-os has been installed on ${TARGET}.
+"ik-os has been installed on ${TARGET}, encrypted.
 
-On the first boot the system will:
+Every boot will ask for the disk passphrase before the system starts.
+Nothing else can unlock it -- keep it somewhere you can reach from
+another machine.
+
+On the first boot the system will then:
   * create your user account
   * install the approved Flatpak applications
   * set up Homebrew and the company Brewfile
   * verify Docker and CUPS
 
-Remove the installation medium and reboot." 18 72
+Remove the installation medium and reboot." 20 74
 
 reboot

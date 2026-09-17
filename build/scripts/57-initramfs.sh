@@ -33,3 +33,20 @@ output_matches 'watermark' lsinitrd "/usr/lib/modules/${KVER}/initramfs.img" \
 if ! output_matches 'bootc\|ostree' lsinitrd "/usr/lib/modules/${KVER}/initramfs.img"; then
     die "the generated initramfs contains neither the bootc nor the ostree dracut module"
 fi
+
+# Every install is encrypted (ADR 0022), so an initramfs that cannot open a
+# LUKS container does not boot at all -- it stops at an emergency shell with
+# the root filesystem it was asked for nowhere to be found. dracut drops the
+# crypt module quietly when cryptsetup is missing from the image, and the
+# module list in dracut-ik-os.conf asking for it is not evidence that it
+# landed, so check for the binary itself.
+#
+# Verified to be a real check rather than a tautology: the initramfs built
+# before the crypt modules were added contains no cryptsetup at all.
+if ! output_matches 'cryptsetup' lsinitrd "/usr/lib/modules/${KVER}/initramfs.img"; then
+    die "the generated initramfs cannot unlock LUKS: no cryptsetup inside it.
+       Every ik-os install is encrypted (ADR 0022), so this image would
+       install and then fail to boot. Check that the crypt and
+       systemd-cryptsetup modules are in config/boot/dracut-ik-os.conf and
+       that cryptsetup is in packages/base/packages.list."
+fi
