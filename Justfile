@@ -202,7 +202,10 @@ build-iso $target_image=image_name $tag=default_tag:
     just _rootful_load ik-os-iso-builder latest
     # Single source of truth for the install flags, shared with build-qcow2.
     cp config/image.env iso/image.env
-    trap 'rm -f iso/image.env' EXIT
+    # The company CA travels the same way: the builder only sees iso/, and the
+    # live system needs it to verify enterprise Wi-Fi during installation.
+    cp config/company/CA-IK.crt iso/CA-IK.crt
+    trap 'rm -f iso/image.env iso/CA-IK.crt' EXIT
 
     mkdir -p "${output_dir}"
     OUT=$(realpath "${output_dir}")

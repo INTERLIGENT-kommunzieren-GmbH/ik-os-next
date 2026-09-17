@@ -144,6 +144,28 @@ log "Staging the ik-os payload on the medium"
 skopeo copy "oci-archive:${PAYLOAD}" "oci:${WORK}/iso/ik-os/payload:ik-os"
 printf '%s\n' "$TARGET_REF" > "${WORK}/iso/ik-os/target-ref"
 
+# The company CA, so that enterprise Wi-Fi can be verified during installation.
+# Without it, nmtui's "CA certificate" field has nothing to point at when the
+# RADIUS server presents a certificate from the internal CA, and the operator's
+# only way forward is to leave verification off.
+#
+# This is not a company secret and does not weaken the rule below: a CA
+# certificate is the public half by definition, and the same file is already
+# published in this repository and installed into the image's trust store by
+# 70-company.sh. Staged into iso/ by the caller, exactly like image.env.
+if [[ -r "${ISO_SRC}/CA-IK.crt" ]]; then
+    log "Trusting the company CA in the live environment"
+    install -Dm0644 "${ISO_SRC}/CA-IK.crt" \
+        "${WORK}/rootfs/usr/share/ca-certificates/ik-os/CA-IK.crt"
+    echo "ik-os/CA-IK.crt" >> "${WORK}/rootfs/etc/ca-certificates.conf"
+    chroot "${WORK}/rootfs" update-ca-certificates >/dev/null 2>&1 \
+        || echo "WARNING: update-ca-certificates failed in the live rootfs" >&2
+else
+    echo "WARNING: ${ISO_SRC}/CA-IK.crt was not staged. Enterprise Wi-Fi that" >&2
+    echo "         relies on the internal CA cannot be verified in the" >&2
+    echo "         installer. Stage it as the Justfile and build-iso.yml do." >&2
+fi
+
 log "Extracting the live kernel"
 KVER=$(basename "$(find "${WORK}/rootfs/usr/lib/modules" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -1)")
 cp "${WORK}/rootfs/boot/vmlinuz-${KVER}" "${WORK}/iso/live/vmlinuz"

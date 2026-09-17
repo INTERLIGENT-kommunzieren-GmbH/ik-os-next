@@ -64,7 +64,13 @@ jobs:
         # "FATAL: /iso/image.env not staged". The Justfile stages it the same
         # way before mounting iso/ read-only; this workflow never did, which is
         # why it has never completed a run.
-        run: cp config/image.env iso/image.env
+        #
+        # CA-IK.crt goes the same way: the builder mounts only iso/, and the
+        # live system needs the company CA to verify enterprise Wi-Fi while
+        # installing. It is a public certificate, not a secret.
+        run: |
+          cp config/image.env iso/image.env
+          cp config/company/CA-IK.crt iso/CA-IK.crt
 
       - name: Build the ISO
         run: |

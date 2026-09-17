@@ -10,5 +10,6 @@ previous.manifest.json
 changelog.md
 output.env
 iso/image.env
+iso/CA-IK.crt
 ik-os-mok.key
 secrets/
