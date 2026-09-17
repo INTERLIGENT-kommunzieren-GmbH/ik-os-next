@@ -392,18 +392,11 @@ runtime rather than hardcoding one.
 forever (`Restart=always`, `RestartSec=0`), and resets its TTY on every start
 (`TTYReset`, `TTYVTDisallocate`). `ik-os-installer.service` runs on the same
 `/dev/tty1` with `StandardInput=tty-force`. Both therefore hold the console,
-and that produces two symptoms that look unrelated but are not:
-
-* **The keyboard does not control the installer.** Keystrokes are split between
-  agetty and whiptail, so the installer answers some of what is typed, or none
-  of it. In a VM, `systemctl restart getty@tty1` while the disk-selection
-  dialog is up replaces it with `ik-os-live login:` — the installer is still
-  running behind that prompt, waiting for an answer it can no longer receive.
-* **Stray characters in the window borders.** Two writers on one TTY interleave
-  mid-escape-sequence. whiptail draws with CSI sequences, and the terminfo
-  `linux` entry's `acsc` is an identity map drawn under Shift Out, so a
-  sequence cut in half by agetty's output leaves its tail on screen as literal
-  text.
+and the keyboard does not control the installer: keystrokes are split between
+agetty and whiptail, so the installer answers some of what is typed, or none of
+it. In a VM, `systemctl restart getty@tty1` while the disk-selection dialog is
+up replaces it with `ik-os-live login:` — the installer is still running behind
+that prompt, waiting for an answer it can no longer receive.
 
 `iso/build-iso.sh` masks `getty@tty1` in the live system, which also covers
 `autovt@tty1` (an alias for it). The installer unit carries
@@ -414,11 +407,40 @@ actually fixes it.
 The live shell moved with it: root is still passwordless, but on **Alt+F2** and
 up, which logind spawns on demand.
 
-Two things this is *not*, both checked before settling on the above. The live
-console renders DEC line-drawing correctly in both UTF-8 and 8-bit mode, so the
-borders are not a charset-mode problem; and the live system has no locale set
-at all (`LC_CTYPE=POSIX`), which is untidy but did not affect drawing in
-testing.
+### The `@` characters in the boot menu are GRUB's, not the installer's
+
+The stray `@` reported in "the borders of the windows" are in the **GRUB menu
+on the ISO** — the first screen of the boot, before the installer exists. They
+were first blamed on the TTY contention above, on the theory that two writers
+interleave mid-escape-sequence and leave the tail of a sequence on screen as
+literal text. That theory was wrong. Masking `getty@tty1` fixed the keyboard
+and changed nothing about the glyphs, which is how it was caught.
+
+`iso/config/grub.cfg` selects `gfxterm`, which renders text from a `.pf2` font.
+Nothing loaded one, so GRUB fell back to its built-in font, which covers ASCII
+only, and drew every other codepoint as its missing-glyph placeholder: a small
+box with a question mark inside. The menu frame is U+2500-family box drawing
+and the help line reads "Use the ↑ and ↓ keys", so the whole frame and both
+arrows came out as placeholders. At native size on a real screen that
+placeholder reads as an `@`.
+
+The fix is one `loadfont` before `terminal_output gfxterm`. Nothing had to be
+added to the medium: `grub-mkstandalone` already embeds `unicode.pf2` at
+`boot/grub/fonts/unicode.pf2` (`--fonts=FONTS [default=unicode]`), so the font
+shipped in every ISO built so far and simply went unused. Name it through
+`$prefix`, not `$root`: it lives in the memdisk that grub-mkstandalone wraps
+around the config, and the `search` further down repoints `$root` at the
+installation medium. If the font ever does go missing the config falls back to
+`terminal_output console`, whose frame glyphs come from the firmware — plainer
+than gfxterm, but never wrong-looking.
+
+Verified by building the EFI image on its own and booting it under OVMF: frame
+continuous, both arrows rendered, with the ISO build script untouched.
+
+Two things this is *not*, both checked. The live console renders DEC
+line-drawing correctly in UTF-8 and 8-bit mode, so whiptail was never
+mis-drawing; and the live system has no locale set at all (`LC_CTYPE=POSIX`),
+which is untidy but did not affect drawing in testing.
 
 ### Four applications are not Flatpaks, and nothing updates them for you
 
