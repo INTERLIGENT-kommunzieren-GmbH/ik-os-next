@@ -89,6 +89,11 @@ check "initramfs present"                    test -s "/usr/lib/modules/${KVER}/i
 check "branding is inside the initramfs"     bash -c "lsinitrd /usr/lib/modules/${KVER}/initramfs.img 2>/dev/null | grep -q watermark"
 # Every install is encrypted (ADR 0022); an initramfs without cryptsetup
 # installs cleanly and then cannot find its root filesystem.
+# A deployed Dell XPS 13 saw no Wi-Fi networks at all with firmware and regdb
+# both present: wpasupplicant is only a Recommends of network-manager, and
+# recommends are off image-wide, so NetworkManager had no supplicant to scan
+# with. Nothing else in the image reveals that by inspection.
+check "wpasupplicant is installed"           bash -c 'test -x /usr/sbin/wpa_supplicant || test -x /sbin/wpa_supplicant'
 check "initramfs can unlock LUKS"            bash -c "lsinitrd /usr/lib/modules/${KVER}/initramfs.img 2>/dev/null | grep -q systemd-cryptsetup"
 # Without this hook a machine that first boots with no network waits for its
 # next reboot before installing anything. NM ignores group/world-writable
@@ -969,7 +974,19 @@ check "no build secrets left in the image"   bash -c '! compgen -G "/run/secrets
 check "no SSH host keys in the image"        bash -c '! compgen -G "/etc/ssh/ssh_host_*"'
 check "CA-IK is trusted"                     bash -c 'grep -rq "CA-IK" /etc/ca-certificates.conf'
 check "sysctl hardening shipped"             test -f /usr/lib/sysctl.d/90-ik-os.conf
-check "sshd is masked"                       bash -c 'test -L /etc/systemd/system/ssh.service || ! test -x /usr/sbin/sshd'
+# ADR 0023 replaced "sshd is absent and masked" with "sshd is present and off".
+# That is a larger surface, so it is checked in more places than the mask was.
+check "sshd is installed"                    test -x /usr/sbin/sshd
+check "sshd is NOT masked"                   bash -c '! test -L /etc/systemd/system/ssh.service'
+check "ssh.service is not enabled"           bash -c '! test -e /etc/systemd/system/multi-user.target.wants/ssh.service'
+check "ssh.socket is not enabled"            bash -c '! test -e /etc/systemd/system/sockets.target.wants/ssh.socket'
+check "ssh opens the firewall when started"  test -e /usr/lib/systemd/system/ssh.service.d/10-ik-os-firewall.conf
+check "ssh.socket does the same"             test -e /usr/lib/systemd/system/ssh.socket.d/10-ik-os-firewall.conf
+check "host keys generate on demand"         test -e /usr/lib/systemd/system/sshd-keygen.service.d/10-ik-os-always.conf
+# The reason that drop-in exists: without clearing it, host keys are only ever
+# generated on a boot that already happened before SSH could be switched on.
+check "keygen is not first-boot-only"        bash -c 'grep -q "^ConditionFirstBoot=$" /usr/lib/systemd/system/sshd-keygen.service.d/10-ik-os-always.conf'
+check "the firewall zone still omits ssh"    bash -c '! grep -q "service name=\"ssh\"" /usr/lib/firewalld/zones/ik-os.xml'
 
 echo "-- tooling and identity (SDD §43, §57) --"
 check "ik-os CLI"                            test -x /usr/bin/ik-os

@@ -118,6 +118,17 @@ Secure Boot, suspend/resume, printing a page, the migration — is still open.
 Track the milestones in [SDD §62](docs/SDD.md) and the hardware matrix in
 [`docs/hardware.md`](docs/hardware.md).
 
+## Remote access
+
+Nothing listens on a machine nobody has touched (SDD §50). `openssh-server` is
+installed but `ssh.service` and `ssh.socket` ship disabled and the firewall
+zone does not open port 22, so **Remote Login** in GNOME Settings — or
+`ik-os ssh enable` — is what turns it on, and the firewall opens for exactly as
+long as sshd runs ([ADR 0023](docs/adr/0023-ssh-installed-but-off.md)). sshd
+uses Debian's default configuration, which permits password authentication; if
+that is not acceptable for the fleet, change it before any machine has the
+switch.
+
 ## Security note
 
 The previous Bluefin-based image shipped the ik-office OpenVPN client key and

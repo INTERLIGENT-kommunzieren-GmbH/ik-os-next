@@ -6,6 +6,14 @@
     egress and replies are permitted so that driverless printer discovery works.
   </description>
   <service name="mdns"/>
-  <!-- Deliberately NOT opened: ipp, ipp-client, ssh, samba.
-       CUPS listens on localhost only (config/cups/cupsd.conf). -->
+  <!-- Deliberately NOT opened: ipp, ipp-client, samba.
+       CUPS listens on localhost only (config/cups/cupsd.conf).
+
+       ssh is not listed here either, and that is still the default: nothing
+       reaches port 22 on a stock machine. It is no longer a flat refusal
+       though -- a drop-in on ssh.service and ssh.socket adds the ssh service
+       to this zone at RUNTIME for exactly as long as sshd is running, so
+       turning Remote Login on in GNOME Settings opens the port and turning it
+       off closes it again. A reboot with SSH disabled returns to this file as
+       written. See ADR 0023. -->
 </zone>

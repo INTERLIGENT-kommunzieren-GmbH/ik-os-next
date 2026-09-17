@@ -407,6 +407,56 @@ actually fixes it.
 The live shell moved with it: root is still passwordless, but on **Alt+F2** and
 up, which logind spawns on demand.
 
+### Two things Recommends-off broke, and one of them shipped
+
+`config/apt/99-ik-os-immutable.conf` sets `APT::Install-Recommends "false"`.
+That is right for an image — every package is named on purpose — and it has a
+failure mode worth knowing, because it already cost a deployed machine its
+Wi-Fi.
+
+`wpasupplicant` is only a *Recommends* of `network-manager`. Without it
+NetworkManager cannot scan or associate: the driver loads, the card appears in
+`nmcli device`, and **no network is ever listed**. On a Dell XPS 13 with an
+Intel AX201 that looked exactly like missing firmware, and the firmware was
+fine — `firmware-iwlwifi` and `wireless-regdb` were both installed. Nothing
+about the symptom points at the supplicant, which is why `verify-image.sh` now
+checks for it by binary.
+
+The live ISO had the same hole for the same reason, and both lists have to name
+it: neither inherits from the other.
+
+### SSH is installed and switched off, not absent
+
+Reported as "I cannot activate SSH via GNOME Settings", and it was true three
+times over: no `openssh-server`, `systemctl mask ssh.service`, and a firewall
+zone that did not open 22. The Remote Login switch cannot work against any one
+of those and cannot say why.
+
+Now (ADR 0023) the package is installed, both units ship disabled, the mask is
+gone, and a drop-in adds `ssh` to the firewalld zone at runtime for as long as
+sshd runs. A stock machine still listens on nothing; the difference is that the
+person in front of it can change that from the panel they would reach for.
+
+Three details that will bite anyone touching this:
+
+- **The postinst generates host keys at build time.** That would put the same
+  four private keys on every machine. They are deleted in `85-systemd.sh`, and
+  `verify-image.sh` fails the build if any survive.
+- **`sshd-keygen.service` is `ConditionFirstBoot=yes`.** On an image that ships
+  SSH disabled that condition is never true when it matters, so enabling Remote
+  Login weeks later would skip key generation and sshd would fail its own
+  `sshd -t`. A drop-in clears the condition.
+- **`openssh-server`'s postinst runs before `50-ik-os.preset` exists**, so it
+  enables `ssh.service` with no preset to stop it, and the `preset-all` that
+  should undo that runs in a container where systemd is not pid 1 and may fail.
+  The build therefore removes the `.wants` symlinks and *dies* if either unit
+  is still enabled. Whether a fleet laptop listens on 22 out of the box is not
+  a question to leave to a best-effort `systemctl`.
+
+`ik-os ssh disable` no longer masks the unit either — that would break the
+GNOME switch permanently, for a reason nobody would trace to a command they ran
+once.
+
 ### First boot needs a network, so the installer asks for one
 
 A laptop's first boot has no network unless someone gave it Wi-Fi, and first

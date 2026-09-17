@@ -41,6 +41,12 @@ enable firewalld.service
 enable bluetooth.service
 enable thermald.service
 
-# Not wanted on a workstation.
+# Not wanted on a workstation by default. openssh-server IS installed so that
+# GNOME Settings can turn Remote Login on when it is needed (ADR 0023), which
+# makes these two lines the thing that keeps a stock machine from listening:
+# the package's own postinst would otherwise enable it. ssh.socket is named as
+# well, because disabling only the service leaves socket activation to start
+# sshd on the first connection.
 disable ssh.service
+disable ssh.socket
 disable bootc-fetch-apply-updates.timer

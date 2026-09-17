@@ -330,12 +330,15 @@ cmd_diagnostics() {
 }
 
 cmd_ssh() {
-    # SDD §50 keeps sshd off a deployed machine: the image ships openssh-client
-    # only, ssh.service is masked, and the firewalld zone does not open ssh.
-    # This subcommand exists so debugging a machine does not mean remembering
-    # four commands, not to make sshd normal. Everything it does is transient:
-    # the server comes from `bootc usr-overlay` and the firewall rule is runtime
-    # only, so a reboot returns the machine to the shipped posture.
+    # SDD §50 keeps sshd OFF a deployed machine, but no longer absent from it:
+    # openssh-server is installed and both ssh.service and ssh.socket ship
+    # disabled, with the firewalld zone closed (ADR 0023). So this subcommand
+    # no longer has to install anything -- and neither does the Remote Login
+    # switch in GNOME Settings, which is the reason the posture changed.
+    #
+    # Nothing here masks the unit any more. Masking is what made that switch
+    # impossible to use, and a mask applied by a debugging command would break
+    # it again on a machine where someone had once run `ik-os ssh disable`.
     local action="${1:-status}"
     case "$action" in
       status)
@@ -351,30 +354,35 @@ cmd_ssh() {
         ;;
       enable)
         need_root ssh enable
-        if [[ ! -x /usr/sbin/sshd ]]; then
-            echo "==> openssh-server is not in the image; installing transiently"
-            echo "    (bootc usr-overlay: discarded on reboot)"
-            bootc usr-overlay || { echo "could not add a transient /usr overlay" >&2; exit 1; }
-            apt-get update -qq && apt-get install -y -qq openssh-server \
-                || { echo "could not install openssh-server" >&2; exit 1; }
-        fi
-        systemctl unmask ssh 2>/dev/null || true
+        [[ -x /usr/sbin/sshd ]] || { echo "openssh-server is missing from this image" >&2; exit 1; }
+        # `enable`, so it survives a reboot: someone who turned SSH on for a
+        # week of debugging should not lose it to a restart. Use `disable` to
+        # put it back, or the switch in GNOME Settings.
         systemctl enable --now ssh || { echo "could not start sshd" >&2; exit 1; }
-        # Runtime only, deliberately: --permanent would outlive the debugging.
-        firewall-cmd --add-service=ssh >/dev/null 2>&1 \
-            || echo "warning: could not open ssh in firewalld; connections may be dropped"
+        # The firewall is opened by the ssh.service drop-in, not here, so that
+        # the GNOME switch gets the same treatment as this command. Report the
+        # outcome rather than repeating the work.
+        if firewall-cmd --zone=ik-os --query-service=ssh >/dev/null 2>&1; then
+            echo "firewall: ssh open in zone ik-os"
+        else
+            echo "warning: ssh is not open in firewalld; connections may be dropped"
+        fi
         echo
-        echo "sshd is running. This machine now has a listening port it does not"
-        echo "normally have (SDD §50). It reverts on reboot; to undo it now:"
-        echo "    ik-os ssh disable"
+        echo "sshd is running and will start again after a reboot. This machine"
+        echo "now has a listening port it does not normally have (SDD §50)."
+        echo "To undo it:  ik-os ssh disable"
         ;;
       disable)
         need_root ssh disable
+        # Disabled and stopped, never masked: a mask would make the GNOME
+        # Settings switch unusable, silently, and nobody would connect the two.
         systemctl disable --now ssh 2>/dev/null || true
-        systemctl mask ssh 2>/dev/null || true
-        firewall-cmd --remove-service=ssh >/dev/null 2>&1 || true
-        echo "sshd stopped, masked, and removed from the firewall zone."
-        echo "A package installed via usr-overlay is gone after the next reboot."
+        systemctl disable --now ssh.socket 2>/dev/null || true
+        # Belt and braces: the drop-in closes this on stop, but if sshd was
+        # already dead the rule could still be present from an earlier run.
+        firewall-cmd --zone=ik-os --remove-service=ssh >/dev/null 2>&1 || true
+        echo "sshd stopped, disabled and removed from the firewall zone."
+        echo "Remote Login in GNOME Settings can still turn it back on."
         ;;
       *) echo "usage: ik-os ssh [status|enable|disable]" >&2; exit 2 ;;
     esac

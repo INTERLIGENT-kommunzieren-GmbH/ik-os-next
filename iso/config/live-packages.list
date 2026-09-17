@@ -7,10 +7,14 @@ init
 udev
 dbus
 network-manager
-# Wi-Fi in the installer. The installed image has all of this via
-# packages/hardware, but the live system is bootstrapped from its own list and
-# had none of it: NetworkManager was present and could not touch a wireless
+# Wi-Fi in the installer. The live system is bootstrapped from its own list and
+# had none of this: NetworkManager was present and could not touch a wireless
 # card, which is the only network a laptop has at install time.
+#
+# The installed image was missing wpasupplicant for the same reason -- it is a
+# Recommends, and recommends are off -- which is why a deployed machine saw no
+# Wi-Fi networks at all. Both lists have to name it; neither inherits from the
+# other.
 #
 #   network-manager-tui  nmtui, which the installer shells out to. It handles
 #                        WPA2/WPA3 passphrases, WPA-Enterprise (802.1X) and

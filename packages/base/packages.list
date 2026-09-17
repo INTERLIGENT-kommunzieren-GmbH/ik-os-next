@@ -93,9 +93,25 @@ network-manager-openvpn-gnome   # the other half, and not pulled in by the
                                 # connection editor" and the connection can
                                 # never ask for a password.
 wireless-regdb
+wpasupplicant           # NetworkManager cannot use a wireless card at all
+                        # without it: the driver loads, the device appears, and
+                        # no network is ever listed, which reads as a firmware
+                        # or driver fault and is not one. It is only a
+                        # Recommends of network-manager, and this image sets
+                        # APT::Install-Recommends "false"
+                        # (config/apt/99-ik-os-immutable.conf), so it has to be
+                        # named here. Found on a deployed Dell XPS 13 with an
+                        # Intel AX201: firmware-iwlwifi and wireless-regdb were
+                        # both present and Wi-Fi still showed nothing.
 iproute2
 iputils-ping
 openssh-client
+openssh-server          # NOT enabled: the preset disables ssh.service and
+                        # ssh.socket, and firewalld does not open the port, so
+                        # a stock machine still listens on nothing (SDD §50).
+                        # It is here so that "Remote Login" in GNOME Settings
+                        # can be switched on when someone needs it, instead of
+                        # failing with no explanation. See ADR 0023.
 # ik-os-teams-backgrounds.service is written in Python (ADR 0020). python3 is
 # already pulled in as a dependency -- firewalld is a Python program -- but a
 # service whose ExecStart depends on somebody else's Depends is one package
