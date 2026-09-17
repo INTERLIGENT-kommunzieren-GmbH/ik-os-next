@@ -14,6 +14,14 @@ install -Dm0755 "${CTX}/scripts/firstboot/ik-os-enroll"     /usr/libexec/ik-os/i
 install -Dm0755 "${CTX}/scripts/firstboot/ik-os-user-groups" /usr/libexec/ik-os/ik-os-user-groups
 install -Dm0755 "${CTX}/scripts/firstboot/ik-os-lansweeper"  /usr/libexec/ik-os/ik-os-lansweeper
 install -Dm0755 "${CTX}/scripts/firstboot/ik-os-lansweeper-report" /usr/libexec/ik-os/ik-os-lansweeper-report
+
+# Ships next to ik-os-firstboot rather than with the other NetworkManager
+# configuration because it is meaningless on its own: it exists only to resume
+# the script above when a network appears. NM reads /usr/lib as well as /etc,
+# and ignores dispatcher scripts that are group- or world-writable, hence 0755
+# root:root.
+install -Dm0755 "${CTX}/config/network/60-ik-os-firstboot" \
+    /usr/lib/NetworkManager/dispatcher.d/60-ik-os-firstboot
 install -Dm0755 "${CTX}/scripts/firstboot/ik-os-homebrew"    /usr/libexec/ik-os/ik-os-homebrew
 install -Dm0755 "${CTX}/scripts/firstboot/ik-os-hostname"    /usr/libexec/ik-os/ik-os-hostname
 install -Dm0755 "${CTX}/scripts/firstboot/ik-os-notify"      /usr/libexec/ik-os/ik-os-notify

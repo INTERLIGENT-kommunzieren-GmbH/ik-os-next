@@ -1,0 +1,31 @@
+#!/bin/bash
+# Resume ik-os provisioning when a network appears.
+#
+# First boot no longer blocks on the network: ik-os-firstboot marks the steps
+# that need one as failed and lets the login screen come up. Something then has
+# to notice when a network turns up, or a machine imaged at the office and
+# first booted at home would sit with no applications until its next reboot --
+# and the user would have no reason to suspect a reboot was what it wanted.
+#
+# NetworkManager runs dispatcher scripts SERIALLY with a 90s budget per event,
+# so this hook returns immediately: --no-block, with the decision left to
+# ik-os-firstboot, which exits in milliseconds when nothing is pending.
+#
+# $1 = interface, $2 = action.
+case "${2:-}" in
+    up|vpn-up|connectivity-change) ;;
+    *) exit 0 ;;
+esac
+
+# Only act when something is actually outstanding. A healthy machine leaves no
+# .failed stamps behind, and restarting a unit on every network event for
+# nothing is the kind of noise that gets a hook disabled.
+shopt -s nullglob
+pending=( /var/lib/ik-os/firstboot/*.failed )
+(( ${#pending[@]} )) || exit 0
+
+# restart, not start. ik-os-firstboot.service is Type=oneshot with
+# RemainAfterExit=yes, so from systemd's point of view it is still "active
+# (exited)" from boot -- `systemctl start` on it would do exactly nothing, and
+# this hook would look like it worked while provisioning stayed unfinished.
+exec systemctl restart --no-block ik-os-firstboot.service

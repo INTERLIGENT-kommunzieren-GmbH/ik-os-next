@@ -7,6 +7,31 @@ init
 udev
 dbus
 network-manager
+# Wi-Fi in the installer. The installed image has all of this via
+# packages/hardware, but the live system is bootstrapped from its own list and
+# had none of it: NetworkManager was present and could not touch a wireless
+# card, which is the only network a laptop has at install time.
+#
+#   network-manager-tui  nmtui, which the installer shells out to. It handles
+#                        WPA2/WPA3 passphrases, WPA-Enterprise (802.1X) and
+#                        hidden SSIDs, so the installer needs no Wi-Fi UI of
+#                        its own and no opinion about the company's auth type.
+#   wpasupplicant        NM cannot associate without it. It is only a
+#                        Recommends of network-manager, and mmdebstrap does
+#                        not install recommends.
+#   wireless-regdb       regulatory domains; without it the card is limited to
+#                        whatever the driver dares use.
+network-manager-tui
+wpasupplicant
+wireless-regdb
+# Firmware, non-free-firmware component (already enabled in build-iso.sh).
+# firmware-iwlwifi covers Framework's Intel cards and is 180 MB on its own;
+# firmware-misc-nonfree carries the MediaTek firmware the AMD Ryzen models
+# need. firmware-realtek is deliberately NOT here: it is another 38 MB and
+# Framework ships neither, so a Realtek USB adaptor works on the installed
+# system but not during installation. Use a cable for that.
+firmware-iwlwifi
+firmware-misc-nonfree
 iproute2
 iputils-ping
 ca-certificates

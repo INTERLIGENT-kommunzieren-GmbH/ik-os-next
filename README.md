@@ -43,8 +43,10 @@ See [`docs/development.md`](docs/development.md).
 
 ## Install it
 
-**New machine:** boot the installer ISO from the latest release. It takes the
-whole disk and encrypts it — LUKS2, passphrase chosen during installation and
+**New machine:** boot the installer ISO from the latest release. It asks for
+Wi-Fi and carries it over, so the first boot can install applications; if you
+skip that, the desktop comes up bare and finishes setting itself up as soon as
+it reaches a network. It takes the whole disk and encrypts it — LUKS2, passphrase chosen during installation and
 asked for at every boot ([ADR 0022](docs/adr/0022-full-disk-encryption.md)).
 There is no unencrypted install and no recovery key: a lost passphrase is a
 lost disk. Disks under 32 GiB are refused, because first boot needs about

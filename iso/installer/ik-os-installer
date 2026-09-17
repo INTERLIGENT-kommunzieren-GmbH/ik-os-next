@@ -161,6 +161,63 @@ At least ${MIN_PASSPHRASE} characters." 16 74 3>&1 1>&2 2>&3) || exit 1
 done
 unset PASSPHRASE_AGAIN
 
+# --- network (SDD §36) -----------------------------------------------------
+# The installed system downloads every application on its first boot, and a
+# laptop's only network is Wi-Fi it has not been told about yet. First boot no
+# longer hangs waiting for one, but it also cannot install anything, so the
+# machine reaches the desktop bare and stays that way until a network appears.
+# Asking here is the only point where the operator is present, the credentials
+# can be proved by actually connecting, and the answer still lands on disk
+# before first boot needs it.
+#
+# nmtui rather than a Wi-Fi dialog of our own: it already handles WPA2/WPA3
+# passphrases, WPA-Enterprise (802.1X) and hidden SSIDs, so this works whatever
+# the company runs, and there is no credential handling here to get wrong.
+WIFI_CONFIGURED=no
+configure_network() {
+    command -v nmtui >/dev/null 2>&1 || return 0
+    # Nothing to offer without a wireless card -- and nothing to ask if the
+    # machine is already on a cable.
+    nmcli -t -f TYPE device 2>/dev/null | grep -qx wifi || return 0
+    if [[ "$(nmcli -t -f CONNECTIVITY general 2>/dev/null)" == full ]]; then
+        WIFI_CONFIGURED=wired
+        return 0
+    fi
+
+    whiptail --title "Wi-Fi" --yesno \
+"This machine is not on a network.
+
+ik-os installs its applications on the first boot, so without one it
+starts up bare and stays that way until it can reach the internet.
+
+Connecting now copies the network to the installed system, so the
+first boot has it. You can also skip this and connect later from the
+desktop.
+
+Set up Wi-Fi now?" 18 74 || return 0
+
+    while :; do
+        # nmtui takes the whole console for the duration. Nothing else is on
+        # tty1 -- the installer owns it and whiptail has exited -- so it can
+        # simply have it.
+        clear
+        nmtui connect || true
+        clear
+        if nm-online -q --timeout=20 2>/dev/null \
+           || [[ "$(nmcli -t -f CONNECTIVITY general 2>/dev/null)" == full ]]; then
+            WIFI_CONFIGURED=yes
+            return 0
+        fi
+        whiptail --title "Wi-Fi" --yesno \
+"Still not connected.
+
+The password may be wrong, or the network may be out of range.
+
+Try again?" 12 70 || return 0
+    done
+}
+configure_network
+
 # --- install ---------------------------------------------------------------
 clear
 echo "Installing ik-os on ${TARGET}..."
@@ -252,9 +309,68 @@ bootc install to-filesystem \
         "${INSTALL_FLAGS[@]}" \
         "$MNT"
 
+# Carry the network into the installed system, while its filesystem is still
+# mounted here. Without this the credentials just typed would be thrown away
+# with the live system and first boot would have no network after all.
+#
+# The deployment's /etc is NOT "${MNT}/etc". A bootc system keeps a per
+# deployment /etc, and with the composefs backend it is nowhere near where the
+# ostree backend puts it. Read off a real installed disk image with virt-ls:
+#
+#   /                                     boot  composefs  ostree  state
+#   /state/deploy/<id>/etc/NetworkManager NetworkManager.conf  conf.d  ...
+#
+# -- so the writable /etc is /state/deploy/<id>/etc, not
+# /ostree/deploy/<stateroot>/deploy/<csum>.0/etc, and the physical root has no
+# /etc at all. That is a layout nobody should have to rediscover, and it is
+# also one bootc may change, so this searches for a directory the image is
+# known to contain instead of hardcoding the path. If the layout ever stops
+# matching, it says so and carries on: an unconfigured network is a nuisance,
+# a failed install is a brick.
+NETWORK_COPIED=no
+if [[ "$WIFI_CONFIGURED" == yes ]]; then
+    mapfile -t NM_DIRS < <(find "$MNT" -xdev -maxdepth 8 -type d \
+        -path '*/etc/NetworkManager' 2>/dev/null)
+    TARGET_NM=""
+    for d in "${NM_DIRS[@]}"; do
+        [[ "$d" == */deploy/* ]] && { TARGET_NM="$d"; break; }
+    done
+    if [[ -z "$TARGET_NM" && ${#NM_DIRS[@]} -eq 1 ]]; then
+        TARGET_NM="${NM_DIRS[0]}"
+    fi
+    if [[ -n "$TARGET_NM" ]]; then
+        install -d -m0700 "${TARGET_NM}/system-connections"
+        # -a to keep the 0600 the profiles already have: NetworkManager
+        # refuses to load a keyfile that others can read, and these hold the
+        # password that was just typed.
+        if cp -a /etc/NetworkManager/system-connections/*.nmconnection \
+                "${TARGET_NM}/system-connections/" 2>/dev/null; then
+            NETWORK_COPIED=yes
+            echo "Network settings copied to the installed system."
+        fi
+    fi
+    [[ "$NETWORK_COPIED" == yes ]] \
+        || echo "WARNING: could not copy the Wi-Fi settings to the installed system."
+fi
+
 trap - ERR
 umount -R "$MNT" 2>/dev/null || true
 cryptsetup close "$MAPPER" 2>/dev/null || true
+
+# What the first boot can actually do depends on whether it will have a
+# network, so say which of the two this machine is rather than promising
+# applications that cannot be downloaded.
+if [[ "$NETWORK_COPIED" == yes ]]; then
+    NETWORK_NOTE="The Wi-Fi settings were copied over, so the first boot can
+install applications straight away."
+elif [[ "$WIFI_CONFIGURED" == wired ]]; then
+    NETWORK_NOTE="This machine installed over a cable. Leave it plugged in for
+the first boot, or it will have no network to install applications with."
+else
+    NETWORK_NOTE="No network was configured. The first boot will reach the
+desktop without applications -- connect to a network there and ik-os
+finishes setting itself up on its own, with no reboot needed."
+fi
 
 whiptail --title "ik-os installed" --msgbox \
 "ik-os has been installed on ${TARGET}, encrypted.
@@ -263,12 +379,14 @@ Every boot will ask for the disk passphrase before the system starts.
 Nothing else can unlock it -- keep it somewhere you can reach from
 another machine.
 
+${NETWORK_NOTE}
+
 On the first boot the system will then:
   * create your user account
   * install the approved Flatpak applications
   * set up Homebrew and the company Brewfile
   * verify Docker and CUPS
 
-Remove the installation medium and reboot." 20 74
+Remove the installation medium and reboot." 24 74
 
 reboot

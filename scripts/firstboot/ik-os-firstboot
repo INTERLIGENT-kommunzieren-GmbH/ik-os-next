@@ -138,8 +138,59 @@ step_satisfied() {
     [[ -n "$recorded" && "$recorded" == "$(image_id)" ]]
 }
 
+# --- network preconditions -------------------------------------------------
+# Three of the steps above can do nothing whatsoever without a network, and
+# "no network" is the normal state of a laptop on its very first boot: the
+# machine is unboxed somewhere with Wi-Fi it has never been told about.
+#
+# Before this check that boot was punished for it. network-online.target timed
+# out, then the Flatpak step made three passes over every application, each
+# install failing on DNS, with 30s sleeps between passes, until
+# TimeoutStartSec killed the unit -- up to fifteen minutes of held splash, and
+# then a login screen with no applications on it.
+#
+# The installer now asks for Wi-Fi and copies the profile into the installed
+# system, so the usual case is online before any of this runs. This is for the
+# rest of them: imaged at the office and first booted at home, a mistyped
+# passphrase, an access point that is down.
+NETWORK_STEPS=" enrollment lansweeper flatpak "
+NETWORK_STATE=unknown
+
+network_ready() {
+    case "$NETWORK_STATE" in
+        ready)   return 0 ;;
+        offline) return 1 ;;
+    esac
+    # NetworkManager's verdict first: it is the component that knows whether a
+    # link is up and whether it reached anything.
+    if [[ "$(nmcli -t -f CONNECTIVITY general 2>/dev/null)" == full ]]; then
+        NETWORK_STATE=ready
+        return 0
+    fi
+    # NM reports "limited" on some networks that work perfectly -- a proxy, or
+    # its own connectivity check being blocked -- so do not take that as final.
+    # Probe what the expensive step actually needs instead of guessing.
+    if curl -fsS --max-time 5 -o /dev/null https://flathub.org/ 2>/dev/null; then
+        NETWORK_STATE=ready
+        return 0
+    fi
+    NETWORK_STATE=offline
+    return 1
+}
+
 run_step() {
     local scope="$1" name="$2" cmd="$3"
+    if [[ "$NETWORK_STEPS" == *" ${name} "* ]] && ! network_ready; then
+        # Recorded as failed rather than quietly skipped, and deliberately so:
+        # the .failed stamp is what the NetworkManager dispatcher looks for to
+        # resume this the moment a network appears, and what `ik-os
+        # diagnostics` reports. No .done stamp is written, so the next boot
+        # would retry it in any case.
+        date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/${name}.failed"
+        log "${name}: no network — deferred until one appears"
+        splash_detail "${SPLASH_STEP:-Setting up}: no network yet, skipping"
+        return 0
+    fi
     log "${name}: running"
     if "$cmd"; then
         stamp_value "$scope" > "${STATE}/${name}.done"

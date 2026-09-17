@@ -90,6 +90,11 @@ check "branding is inside the initramfs"     bash -c "lsinitrd /usr/lib/modules/
 # Every install is encrypted (ADR 0022); an initramfs without cryptsetup
 # installs cleanly and then cannot find its root filesystem.
 check "initramfs can unlock LUKS"            bash -c "lsinitrd /usr/lib/modules/${KVER}/initramfs.img 2>/dev/null | grep -q systemd-cryptsetup"
+# Without this hook a machine that first boots with no network waits for its
+# next reboot before installing anything. NM ignores group/world-writable
+# dispatcher scripts, so the mode is part of the contract, not cosmetic.
+check "firstboot resumes on network"         test -x /usr/lib/NetworkManager/dispatcher.d/60-ik-os-firstboot
+check "the resume hook is not group-writable" bash -c "[[ ! -w /usr/lib/NetworkManager/dispatcher.d/60-ik-os-firstboot || \$(stat -c %a /usr/lib/NetworkManager/dispatcher.d/60-ik-os-firstboot) == 755 ]]"
 check "kargs enable the boot splash"         bash -c 'grep -q "\"splash\"" /usr/lib/bootc/kargs.d/10-ik-os.toml'
 check "/boot is empty"                       test -z "$(ls -A /boot)"
 check "no dangling kernel symlinks at /"     bash -c '! test -e /vmlinuz -o -L /vmlinuz -o -L /initrd.img'

@@ -407,6 +407,62 @@ actually fixes it.
 The live shell moved with it: root is still passwordless, but on **Alt+F2** and
 up, which logind spawns on demand.
 
+### First boot needs a network, so the installer asks for one
+
+A laptop's first boot has no network unless someone gave it Wi-Fi, and first
+boot is when every application is downloaded. That used to be punished rather
+than handled: `network-online.target` timed out, the Flatpak step made three
+passes over all 55 applications with each install failing on DNS and 30s
+sleeps between passes, `TimeoutStartSec=15min` eventually killed the unit, and
+the machine reached the login screen with nothing installed. Up to a quarter of
+an hour of held splash to achieve nothing.
+
+Two changes, and the second one matters even when the first works.
+
+**The installer asks for Wi-Fi** and copies the profile into the installed
+system. It shells out to `nmtui` rather than growing a Wi-Fi dialog of its
+own — `nmtui` already handles WPA2/WPA3, WPA-Enterprise (802.1X) and hidden
+SSIDs, so the installer needs no opinion about what the company runs and no
+credential handling to get wrong. It only asks when there is a wireless card
+and the machine is not already on a cable, and it proves the answer by
+connecting before accepting it.
+
+This needed packages on the medium: the live system had NetworkManager and no
+way to use a wireless card at all — no `wpasupplicant` (only a Recommends,
+which mmdebstrap does not install), no `wireless-regdb`, no firmware, no
+`nmtui`. `firmware-iwlwifi` alone is 180 MB; `firmware-realtek` is
+deliberately left out, so a Realtek USB adaptor works on the installed system
+but not during installation.
+
+**Carrying the profile over is not a copy into `${MNT}/etc`.** A bootc system
+keeps a per-deployment `/etc`, and with the composefs backend it is nowhere
+near where the ostree backend puts it. Read off a real installed image with
+`virt-ls`:
+
+    /                     boot  composefs  ostree  state
+    /state/deploy/<id>/etc/NetworkManager
+
+The writable `/etc` is `/state/deploy/<id>/etc` — not
+`/ostree/deploy/<stateroot>/deploy/<csum>.0/etc` — and the physical root has no
+`/etc` at all. The installer searches for `*/etc/NetworkManager` instead of
+hardcoding that, because it is a layout bootc may well change, and warns and
+continues if it finds nothing rather than failing an install that has already
+written the disk.
+
+**First boot no longer depends on any of that working.** `ik-os-firstboot`
+probes for a network once, and marks the three steps that need one —
+enrollment, Lansweeper, Flatpak — as failed without attempting them. The login
+screen comes up in seconds instead of fifteen minutes. A NetworkManager
+dispatcher hook then resumes provisioning the moment a network appears, so a
+machine imaged at the office and first booted at home finishes setting itself
+up when the user joins their home Wi-Fi, with no reboot and nothing to know.
+
+Two traps in that hook, both commented where they live. It keys off the
+`.failed` stamps, so a healthy machine does not restart a unit on every network
+event. And it uses `systemctl restart`, not `start`: the unit is `Type=oneshot`
+with `RemainAfterExit=yes`, so it is still "active (exited)" from boot and
+`start` would do nothing at all while looking like it had worked.
+
 ### The `@` characters in the boot menu are GRUB's, not the installer's
 
 The stray `@` reported in "the borders of the windows" are in the **GRUB menu
