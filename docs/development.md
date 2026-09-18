@@ -477,6 +477,12 @@ credential handling to get wrong. It only asks when there is a wireless card
 and the machine is not already on a cable, and it proves the answer by
 connecting before accepting it.
 
+It asks **even when the machine is already online**, defaulting to no. That
+looks redundant and is not: a laptop installed on a cable at the office has no
+Wi-Fi at all the first time somebody opens it at home, which is the normal life
+of these machines. Skipping the question whenever a cable was plugged in would
+have produced exactly that.
+
 This needed packages on the medium: the live system had NetworkManager and no
 way to use a wireless card at all — no `wpasupplicant` (only a Recommends,
 which mmdebstrap does not install), no `wireless-regdb`, no firmware, no

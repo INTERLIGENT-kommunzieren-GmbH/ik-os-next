@@ -195,12 +195,25 @@ configure_network() {
     # Nothing to offer without a wireless card -- and nothing to ask if the
     # machine is already on a cable.
     nmcli -t -f TYPE device 2>/dev/null | grep -qx wifi || return 0
+
+    # Being online already is not a reason to skip this. A laptop installed on
+    # a cable at the office has no Wi-Fi at all the first time somebody opens
+    # it somewhere else -- which is the normal life of the machines this image
+    # is for. So the question is still asked, just with the honest framing and
+    # defaulting to no.
     if [[ "$(nmcli -t -f CONNECTIVITY general 2>/dev/null)" == full ]]; then
         WIFI_CONFIGURED=wired
-        return 0
-    fi
+        whiptail --title "Wi-Fi" --defaultno --yesno \
+"This machine is already on a network, so the installation itself does
+not need Wi-Fi.
 
-    whiptail --title "Wi-Fi" --yesno \
+It is still worth adding one now: whatever is set up here is copied to
+the installed system, and a laptop installed on a cable has no way to
+reach anything the first time it is opened somewhere else.
+
+Set up Wi-Fi as well?" 18 74 || return 0
+    else
+        whiptail --title "Wi-Fi" --yesno \
 "This machine is not on a network.
 
 ik-os installs its applications on the first boot, so without one it
@@ -211,6 +224,7 @@ first boot has it. You can also skip this and connect later from the
 desktop.
 
 Set up Wi-Fi now?" 18 74 || return 0
+    fi
 
     while :; do
         # nmtui takes the whole console for the duration. Nothing else is on
