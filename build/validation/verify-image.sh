@@ -93,6 +93,10 @@ check "branding is inside the initramfs"     bash -c "lsinitrd /usr/lib/modules/
 # both present: wpasupplicant is only a Recommends of network-manager, and
 # recommends are off image-wide, so NetworkManager had no supplicant to scan
 # with. Nothing else in the image reveals that by inspection.
+# libsecret-1-0 was in the image with nothing implementing the service it
+# talks to, so every saved password had nowhere to go.
+check "a Secret Service is provided"         test -x /usr/bin/gnome-keyring-daemon
+check "the keyring unlocks at login"         bash -c 'ls /usr/lib/*/security/pam_gnome_keyring.so >/dev/null 2>&1'
 check "wpasupplicant is installed"           bash -c 'test -x /usr/sbin/wpa_supplicant || test -x /sbin/wpa_supplicant'
 check "initramfs can unlock LUKS"            bash -c "lsinitrd /usr/lib/modules/${KVER}/initramfs.img 2>/dev/null | grep -q systemd-cryptsetup"
 # Without this hook a machine that first boots with no network waits for its

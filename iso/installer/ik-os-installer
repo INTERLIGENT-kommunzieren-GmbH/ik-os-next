@@ -27,7 +27,23 @@ die() { whiptail --title "ik-os installer" --msgbox "$1" 14 72; exit 1; }
 
 ik-os requires UEFI (SDD §5). Enable UEFI boot in the firmware setup and
 start the installer again."
-[[ -d "$PAYLOAD" ]] || die "The ik-os payload was not found at ${PAYLOAD}."
+# A missing payload almost always means the medium is gone rather than that
+# the ISO is broken, and the difference matters: the most common way to get
+# here is pulling the USB stick when told to, at the end of an install that
+# worked, and then being shown an error about a payload.
+if [[ ! -d "$PAYLOAD" ]]; then
+    if ! mountpoint -q "$MEDIUM" 2>/dev/null; then
+        die "The installation medium is no longer attached.
+
+If ik-os has just been installed, that install is finished and this
+message is only about the medium: take the USB stick out, if it is still
+plugged in, and restart the machine.
+
+If the installation has not run yet, the medium was removed too early.
+Plug it back in and restart."
+    fi
+    die "The ik-os payload was not found at ${PAYLOAD}."
+fi
 
 # --- disk selection --------------------------------------------------------
 # lsblk's columnar output cannot be parsed by field index: MODEL is empty on
@@ -387,6 +403,24 @@ On the first boot the system will then:
   * set up Homebrew and the company Brewfile
   * verify Docker and CUPS
 
-Remove the installation medium and reboot." 24 74
+Press OK to restart.
 
-reboot
+This machine is still running from the installation medium, so leave
+it in place until the screen goes blank -- then take it out while the
+machine restarts, or it will start the installer again instead of
+ik-os." 26 74
+
+# Pulling the medium during the reboot is the instruction above, and it can
+# take the squashfs out from under the shutdown before it finishes. If that
+# happens, exiting here would return control to systemd, whose
+# Restart=on-failure would start the installer over -- on a disk that now has
+# ik-os on it, with the payload gone. That is exactly how a finished install
+# came to end with "The ik-os payload was not found".
+#
+# So: ask for a reboot, then never return. Each fallback is cruder than the
+# last, because by this point the filesystem this script lives on may already
+# be unreadable.
+systemctl reboot --no-wall 2>/dev/null || reboot 2>/dev/null || true
+sleep 60
+reboot -f 2>/dev/null || true
+sleep infinity

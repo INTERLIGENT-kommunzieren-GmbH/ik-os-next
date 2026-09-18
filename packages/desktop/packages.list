@@ -20,6 +20,18 @@ gnome-initial-setup             # SDD §36/§37 — creates the first user accou
                                 # locked root (SDD §27), so without this GDM comes
                                 # up with nothing to log in as.
 gnome-control-center            # printer UI required by SDD §23
+gnome-keyring                   # the Secret Service. Nothing else in this
+                                # image provides org.freedesktop.secrets, so
+                                # without it there is no store for Wi-Fi
+                                # passwords, the VPN password (which ADR 0018
+                                # deliberately does not keep in the profile),
+                                # or anything else using libsecret --
+                                # libsecret-1-0 is the client half and was
+                                # already here with no server to talk to.
+libpam-gnome-keyring            # unlocks that keyring with the login password.
+                                # Without it the user is asked for a second
+                                # password at every login, which is the usual
+                                # way people end up storing nothing in it.
 # gnome-control-center *Recommends* this, and the build installs with
 # --no-install-recommends, so it was silently absent. It is the GTK3 editor for
 # the ik-office VPN profile: Settings' own panel edits only name and IP, while
