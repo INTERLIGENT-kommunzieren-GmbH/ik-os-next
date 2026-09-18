@@ -95,6 +95,9 @@ check "branding is inside the initramfs"     bash -c "lsinitrd /usr/lib/modules/
 # with. Nothing else in the image reveals that by inspection.
 # libsecret-1-0 was in the image with nothing implementing the service it
 # talks to, so every saved password had nowhere to go.
+# The fallback that does not need a session, an agent or a keyring. Wi-Fi has
+# now failed twice in ways that left no way to connect from the desktop.
+check "nmtui is available"                   test -x /usr/bin/nmtui
 check "a Secret Service is provided"         test -x /usr/bin/gnome-keyring-daemon
 check "the keyring unlocks at login"         bash -c 'ls /usr/lib/*/security/pam_gnome_keyring.so >/dev/null 2>&1'
 check "wpasupplicant is installed"           bash -c 'test -x /usr/sbin/wpa_supplicant || test -x /sbin/wpa_supplicant'

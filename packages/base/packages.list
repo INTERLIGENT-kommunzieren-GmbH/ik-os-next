@@ -77,6 +77,17 @@ systemd-cryptsetup      # /usr/lib/systemd/systemd-cryptsetup, which Debian
 
 ## --- networking -----------------------------------------------------------
 network-manager
+network-manager-tui             # nmtui. The graphical path is not always
+                                # there: GNOME's Wi-Fi dialog depends on a
+                                # secret agent, and when that agent cannot
+                                # reach a Secret Service the dialog closes
+                                # without ever asking for a password --
+                                # observed on a deployed machine. nmtui needs
+                                # no agent, no session and no keyring, handles
+                                # both WPA2 personal and 802.1X enterprise, and
+                                # is 900 kB. It is also what the installer uses,
+                                # so the same tool works before and after
+                                # installation.
 network-manager-openvpn         # company VPN (config/company, SDD §39) --
                                 # the NM service plugin, which is only the
                                 # daemon half.

@@ -425,6 +425,35 @@ checks for it by binary.
 The live ISO had the same hole for the same reason, and both lists have to name
 it: neither inherits from the other.
 
+### When the Wi-Fi dialog closes without asking for a password
+
+Reported from a deployed machine, and worth recognising on sight: networks are
+listed, you click one, the dialog closes, and nothing else happens — no
+password field, no error, no connection.
+
+That is not a driver, a firmware or a card problem. GNOME Shell registers a
+NetworkManager *secret agent*; when NM needs a Wi-Fi password it asks that
+agent, and the agent works through libsecret against the Secret Service. The
+image had `libsecret-1-0` — the client half — with nothing implementing
+`org.freedesktop.secrets`, because `gnome-keyring` is pulled in by the
+`gnome-core` metapackage and this image installs components individually. The
+agent cannot service the request, NM gets no secrets, and the UI gives up
+silently.
+
+`gnome-keyring` and `libpam-gnome-keyring` are now in the desktop set, with
+acceptance checks for both the daemon and the PAM module.
+
+`nmtui` is in the image for the same incident. It needs no agent, no session
+and no keyring, does WPA2 personal and 802.1X enterprise, and is the same tool
+the installer uses — so there is one way to connect that works before
+installation, after installation, and when the desktop's own path is broken:
+
+    sudo nmtui
+
+Two Wi-Fi failures in two days, both of which presented as hardware faults and
+were neither, is the reason both of those are checked in `verify-image.sh`
+rather than assumed.
+
 ### SSH is installed and switched off, not absent
 
 Reported as "I cannot activate SSH via GNOME Settings", and it was true three
