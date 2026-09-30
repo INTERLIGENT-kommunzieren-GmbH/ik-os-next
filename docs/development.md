@@ -203,7 +203,9 @@ never to make the script work; it is to ship what the script would have done and
 answer the prompt in advance (ADR 0013). Watch for this shape in any monitoring
 or hardware app: if it wants file capabilities, a udev rule or a kernel module
 loaded, that belongs in the image. `bootc usr-overlay` is not an answer — the
-change survives until the next reboot, which is the worst of both.
+change survives until the next reboot, which is the worst of both. Nor is
+`ik-os pkg` (ADR 0024): its overlay is per machine and is for archive packages
+one user needs. It is not for what an application needs from every host.
 
 **A polkit rule that names a non-existent action fails silently.** polkit
 ignores the clause; the panel just keeps prompting for a password with no
