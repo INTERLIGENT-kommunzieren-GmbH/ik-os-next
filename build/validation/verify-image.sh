@@ -689,6 +689,7 @@ claude_desktop_from_anthropic() {
 check "Claude Desktop present"               claude_desktop_ok
 check "Claude Desktop is the vendor package" claude_desktop_from_anthropic
 check "Anthropic signing key installed"      test -f /usr/share/keyrings/claude-desktop-archive-keyring.asc
+check "the repository is configured once"    test ! -e /etc/apt/sources.list.d/claude-desktop.list
 check "company Brewfile shipped"             test -f /usr/share/ik-os/Brewfile
 # Debian leaves the /etc/profile.d loop commented out in /etc/bash.bashrc, and
 # GNOME Terminal starts an interactive non-login shell. A profile.d snippet
