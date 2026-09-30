@@ -1112,8 +1112,11 @@ check "the rebuild unit is enabled"          test -e /etc/systemd/system/multi-u
 check "the rebuild unit does not hold back the login screen" \
     bash -c '! grep -q "^Before=.*gdm" /usr/lib/systemd/system/ik-os-usr-overlay-rebuild.service'
 check "plain apt/dpkg is guarded on the host" test -x /usr/libexec/ik-os/ik-os-apt-guard -a -r /etc/apt/apt.conf.d/99-ik-os-usr-overlay
-check "dpkg runs the guard itself"            grep -qx 'pre-invoke=/usr/libexec/ik-os/ik-os-apt-guard' /etc/dpkg/dpkg.cfg.d/ik-os-usr-overlay
+check "dpkg runs the guard itself"            grep -qx 'pre-invoke=/usr/libexec/ik-os/ik-os-apt-guard dpkg' /etc/dpkg/dpkg.cfg.d/ik-os-usr-overlay
 check "apt update runs the guard"             grep -q 'APT::Update::Pre-Invoke' /etc/apt/apt.conf.d/99-ik-os-usr-overlay
+check "apt install/upgrade explain ik-os pkg" \
+    bash -c 'grep -q "AptCli::Hooks::Install" /etc/apt/apt.conf.d/99-ik-os-usr-overlay && grep -q "AptCli::Hooks::Upgrade" /etc/apt/apt.conf.d/99-ik-os-usr-overlay'
+check "the upgrade notice ships"              test -s /usr/lib/ik-os/apt-immutable-notice
 overlay_base_detected() {
     # Regression: a pipefail `cut | grep -q` made every base package look new.
     # shellcheck source=scripts/overlay/ik-os-usr-overlay-lib

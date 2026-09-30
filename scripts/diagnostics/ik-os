@@ -412,6 +412,16 @@ cmd_pkg() {
       list)
         uo_packages
         ;;
+      search|show)
+        # Read-only, so no root needed once the overlay's lists exist; plain
+        # `apt search` reads apt's default lists, which are empty here.
+        (( $# )) || { echo "usage: ik-os pkg ${action} <term>..." >&2; exit 2; }
+        if ! compgen -G "${UO_LISTS}/*_Packages*" >/dev/null; then
+            need_root pkg "$action" "$@"
+            uo_apt update -qq || exit 1
+        fi
+        IK_OS_PKG=1 apt-cache -o Dir::State::Lists="$UO_LISTS" "$action" "$@"
+        ;;
       status)
         kv "Deployment" "${digest:0:12}"
         kv "Overlay mounted" "$(uo_mounted && echo yes || echo no)"
@@ -500,7 +510,7 @@ cmd_pkg() {
         uo_umount
         /usr/libexec/ik-os/ik-os-usr-overlay-rebuild
         ;;
-      *) echo "usage: ik-os pkg [list|status|install|remove|reset|rebuild]" >&2; exit 2 ;;
+      *) echo "usage: ik-os pkg [list|search|show|status|install|remove|reset|rebuild]" >&2; exit 2 ;;
     esac
 }
 
@@ -638,7 +648,7 @@ ik-os — Interligent developer workstation
   ik-os ssh [status|enable|disable]
                                 Temporarily allow SSH in for debugging.
                                 Transient: reverts on reboot (SDD §50)
-  ik-os pkg [list|status|install|remove|reset|rebuild] [package...]
+  ik-os pkg [list|search|show|status|install|remove|reset|rebuild] [package...]
                                 Debian packages in a persistent overlay on
                                 /usr, reinstalled on every new image (ADR 0024)
 

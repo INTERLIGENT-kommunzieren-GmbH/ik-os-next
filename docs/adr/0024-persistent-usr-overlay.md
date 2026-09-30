@@ -59,8 +59,8 @@ another.
 | Failed replay | the overlay is unmounted, the machine stays on clean base, the user is told |
 | Rollback | the previous deployment's upper is still on disk and mounts as it was |
 | GC | at boot, uppers whose digest `bootc status` no longer lists are deleted |
-| Interface | `ik-os pkg install / remove / list / status / reset / rebuild` |
-| Raw apt/dpkg | refused by a dpkg `pre-invoke` hook (which also covers apt) and an `APT::Update::Pre-Invoke` hook, unless `ik-os pkg` holds the lock |
+| Interface | `ik-os pkg install / remove / list / search / show / status / reset / rebuild` |
+| Raw apt/dpkg | refused unless `ik-os pkg` holds the lock: a dpkg `pre-invoke` hook covers dpkg and everything that calls it, and apt hooks (`AptCli::Hooks::Install`/`Upgrade`, `APT::Update::Pre-Invoke`) stop `apt install/remove/upgrade/update` before they resolve anything, with a message pointing at `ik-os pkg` or `ik-os update`. `apt search` gets a hint only |
 | Sources | the Debian archive and company repositories the image already configures; no local `.deb` files |
 
 Replay costs a download after every image update. That is the price of never

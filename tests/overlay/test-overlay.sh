@@ -31,8 +31,12 @@ check "the overlay is ready for this image" \
     bash -c 'd=$(tr " " "\n" </proc/cmdline | sed -n "s/^composefs=?\{0,1\}//p"); test -e "/var/lib/ik-os/usr-overlay/$d/ready"'
 # Match the guard's own message, not the exit status: apt and dpkg fail for
 # other reasons too (a read-only /usr, no package lists), and the check would
-# pass for the wrong one. `apt install` is not tested: plain apt keeps its own,
-# empty lists, so it stops at "Unable to locate package" before dpkg runs.
+# pass for the wrong one.
+check "plain apt install points at ik-os pkg" \
+    bash -c 'o=$(apt-get install -y sl 2>&1); grep -q "ik-os pkg install" <<<"$o"'
+check "plain apt upgrade points at ik-os update" \
+    bash -c 'o=$(apt-get upgrade -y 2>&1); grep -q "ik-os update" <<<"$o"'
+check "ik-os pkg search finds packages"    bash -c 'o=$(ik-os pkg search "^${PROBE}\$"); grep -q "^${PROBE} " <<<"$o"'
 check "plain apt update is refused by the guard" \
     bash -c 'o=$(apt-get update 2>&1); grep -q "not used directly" <<<"$o"'
 # Harmless if the guard were missing: there is nothing left to configure.
