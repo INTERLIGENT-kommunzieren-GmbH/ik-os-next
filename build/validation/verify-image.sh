@@ -981,6 +981,7 @@ check "no build secrets left in the image"   bash -c '! compgen -G "/run/secrets
 check "no SSH host keys in the image"        bash -c '! compgen -G "/etc/ssh/ssh_host_*"'
 check "CA-IK is trusted"                     bash -c 'grep -rq "CA-IK" /etc/ca-certificates.conf'
 check "sysctl hardening shipped"             test -f /usr/lib/sysctl.d/90-ik-os.conf
+check "users can ping"                       grep -q '^net.ipv4.ping_group_range = 0 2147483647' /usr/lib/sysctl.d/90-ik-os.conf
 # ADR 0023 replaced "sshd is absent and masked" with "sshd is present and off".
 # That is a larger surface, so it is checked in more places than the mask was.
 check "sshd is installed"                    test -x /usr/sbin/sshd
