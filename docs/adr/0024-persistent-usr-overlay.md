@@ -60,7 +60,7 @@ another.
 | Rollback | the previous deployment's upper is still on disk and mounts as it was |
 | GC | at boot, uppers whose digest `bootc status` no longer lists are deleted |
 | Interface | `ik-os pkg install / remove / list / status / reset / rebuild` |
-| Raw apt/dpkg | refused by a `DPkg::Pre-Invoke` hook unless `ik-os pkg` holds the lock |
+| Raw apt/dpkg | refused by a dpkg `pre-invoke` hook (which also covers apt) and an `APT::Update::Pre-Invoke` hook, unless `ik-os pkg` holds the lock |
 | Sources | the Debian archive and company repositories the image already configures; no local `.deb` files |
 
 Replay costs a download after every image update. That is the price of never
@@ -121,22 +121,59 @@ includes `packages.list` so that IT can see it.
 a container, Homebrew or Flatpak first. The overlay is for the cases where none
 of those works. Anything every developer needs still goes into the image.
 
+**Overlay packages follow the image's apt and dpkg policy:** no recommends, and
+no man pages or docs (`config/apt/`, installed by `00-preflight.sh`). A user who
+needs a recommended package names it.
+
 **Updates need the network to be complete.** A machine that updates offline
 boots clean base and replays when it can.
 
-## What is not yet verified
+**`bootc status` calls the overlay transient.** bootc's composefs backend
+assumes that any mount on `/usr` came from `bootc usr-overlay`, so it reports
+`usrOverlay: transient, read-write`. This is cosmetic: `bootc upgrade` does not
+consult it. `ik-os pkg status` is the authoritative view.
 
-- **Where the mount lands.** The preferred place is an initrd unit that mounts
-  on `/sysroot/usr` after bootc's composefs root setup. That needs
-  `/sysroot/var` reachable at that point in the initrd, which has to be
-  confirmed on a booted VM with bootc v1.16.9's composefs backend. If it is not
-  reachable, the fallback is RakuOS's shape: a `DefaultDependencies=no`
-  service before `sysinit.target`, followed by `systemctl daemon-reload`. This
-  ADR is updated with whichever is used.
-- **Overlay stack depth.** An overlay over the composefs root must fit in the
-  kernel's limit of two stacked filesystems.
-- **The upper's xattrs.** The upper needs `trusted.*` xattrs on the LUKS-backed
-  `/var` filesystem.
+## Where it lives
+
+- **Initramfs:** the dracut module `config/boot/dracut/90ik-os-usr-overlay/`.
+  Its unit, `ik-os-usr-overlay.service`, runs `After=bootc-root-setup.service`
+  and `Before=initrd-root-fs.target`. It mounts only an upper marked `ready`, and
+  it never fails the boot.
+- **Running system:** `ik-os-usr-overlay-rebuild.service`, plus `ik-os pkg` in
+  `scripts/diagnostics/ik-os`. Both source `scripts/overlay/ik-os-usr-overlay-lib`.
+- **The base-package list** is the existing release manifest,
+  `/usr/share/ik-os/packages.manifest`, which `95-finalize.sh` writes from the
+  final dpkg database. There is no second list to keep in step.
+  `verify-image.sh` checks that it matches `dpkg-query`.
+
+## What is verified, and what is not
+
+Read from bootc v1.16.9 (`crates/initramfs/src/lib.rs`,
+`crates/lib/src/bootc_composefs/state.rs`):
+
+- `bootc-root-setup.service` assembles the whole root at `/sysroot` before
+  `initrd-root-fs.target`.
+- It binds `/sysroot/var` from `state/deploy/<digest>/var`. Every deployment's
+  `var` is a symlink to one shared `state/os/default/var`, which is what lets
+  `packages.list` follow the user across images.
+- The deployment id is the `composefs=` digest on the command line. A `?` prefix
+  marks a deployment booted without verity. It is the same value as
+  `.composefs.verity` in `bootc status --json`.
+
+Seen on a booted VM (2026-09-30):
+
+- **Stack depth.** The overlay on the composefs overlay on EROFS mounts; that
+  is two stacked filesystems, the kernel's limit. Enabling `[root] transient`
+  in `setup-root-conf.toml` would add a third, and must not be combined with
+  this.
+- **The upper's xattrs.** An upper on the LUKS-backed `/var` works.
+- **The initrd mount.** After a reboot the overlay is mounted about 2 s into
+  boot, the rebuild unit finds it ready and does nothing, and the installed
+  package is there. The fallback (a `DefaultDependencies=no` service before
+  `sysinit.target`, then `systemctl daemon-reload`) is not needed.
+
+Not yet seen: the replay after a real image update, and `bootc rollback`
+mounting the previous deployment's overlay.
 
 ## What IT must confirm
 

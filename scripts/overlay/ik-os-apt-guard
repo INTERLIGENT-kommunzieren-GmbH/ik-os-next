@@ -1,0 +1,23 @@
+#!/bin/sh
+# DPkg::Pre-Invoke hook (ADR 0024). On a booted ik-os host, apt and dpkg run
+# only through `ik-os pkg`: a package installed any other way is not in
+# packages.list, so it silently disappears at the next image update.
+#
+# Builds are left alone. A derived image (`FROM ik-os-next`) runs apt in a
+# container, and the container sees the host's /proc/cmdline, so the composefs
+# check alone is not enough.
+[ -e /run/ik-os/usr-overlay.lock ] && exit 0
+[ -e /run/.containerenv ] || [ -e /.dockerenv ] && exit 0
+systemd-detect-virt --quiet --container 2>/dev/null && exit 0
+grep -q 'composefs=' /proc/cmdline 2>/dev/null || exit 0
+
+cat >&2 <<'EOF'
+ik-os: apt and dpkg are not used directly on this machine.
+
+  sudo ik-os pkg install <package>    add a Debian package that persists across updates
+  sudo ik-os pkg remove <package>
+  ik-os pkg list
+
+Anything installed with plain apt would vanish at the next image update.
+EOF
+exit 1

@@ -1,0 +1,20 @@
+[Unit]
+Description=Reinstall the user's overlay packages on this image (ADR 0024)
+Documentation=https://github.com/interligent-kommunzieren-gmbh/ik-os-next
+# Downloads from the Debian archive. Deliberately not Before=gdm.service:
+# the first boot of an image narrates rather than waits (ADR 0012).
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/var/lib/ik-os/usr-overlay/packages.list
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemd-inhibit \
+    --what=shutdown --mode=block --who="ik-os" \
+    --why="ik-os is reinstalling your extra packages" \
+    /usr/libexec/ik-os/ik-os-usr-overlay-rebuild
+TimeoutStartSec=30min
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target

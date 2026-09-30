@@ -1,0 +1,16 @@
+[Unit]
+Description=Mount the ik-os package overlay on /usr (ADR 0024)
+DefaultDependencies=no
+ConditionKernelCommandLine=composefs
+ConditionPathExists=/etc/initrd-release
+# bootc-root-setup assembles /sysroot, including the /var bind mount the upper
+# lives on.
+After=bootc-root-setup.service
+Requires=bootc-root-setup.service
+Before=initrd-root-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/ik-os/usr-overlay-initrd
+StandardOutput=journal+console

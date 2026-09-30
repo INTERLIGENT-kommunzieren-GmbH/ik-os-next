@@ -298,7 +298,8 @@ lint:
         # *.py is excluded for the same kind of reason in reverse:
         # scripts/desktop/ik-os-teams-backgrounds.py matches ik-os-* but is
         # Python, and shellcheck errors out (SC1071) on its shebang.
-        find build scripts migration iso tests config/network -type f \
+        # config/boot/dracut holds the initramfs half of ADR 0024.
+        find build scripts migration iso tests config/network config/boot/dracut -type f \
              \( -name '*.sh' -o -name 'ik-os' -o -name 'ik-os-*' \
                 -o -name '[0-9][0-9]-ik-os-*' \) \
              ! -name '*.service' ! -name '*.py' | sort

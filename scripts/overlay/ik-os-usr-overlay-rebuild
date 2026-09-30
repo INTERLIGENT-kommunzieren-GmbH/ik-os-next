@@ -1,0 +1,78 @@
+#!/bin/bash
+# Replay the user's overlay packages into this deployment (ADR 0024).
+#
+# A new deployment boots with no overlay: the initramfs only mounts an upper
+# marked ready. This unit runs once the network is up, builds a fresh upper
+# against the new base, installs packages.list into it, and marks it ready.
+# The login screen is not held back for it (ADR 0012); the user is told when
+# their packages are back.
+#
+# An upper is never carried from one base to the next. That is the point: its
+# copied-up dpkg status and files would shadow whatever the new image changed.
+set -euo pipefail
+# shellcheck source=scripts/overlay/ik-os-usr-overlay-lib
+. /usr/libexec/ik-os/usr-overlay-lib
+
+digest=$(uo_digest) || { uo_log "not a composefs boot; nothing to do"; exit 0; }
+dir=$(uo_dir "$digest")
+mkdir -p "$UO_STATE"
+
+uo_gc
+
+mapfile -t wanted < <(uo_packages)
+if (( ${#wanted[@]} == 0 )); then
+    # After `ik-os pkg reset`, or after removing the last package. Nothing is
+    # mounted: reset cleared every ready marker, so the initramfs skipped it.
+    if ! uo_mounted; then
+        for d in "$UO_STATE"/*/; do
+            [[ "$(basename "$d")" =~ ^[0-9a-f]{64,128}$ ]] && rm -rf -- "$d"
+        done
+    fi
+    uo_log "no overlay packages; the machine runs the plain image"
+    exit 0
+fi
+
+if uo_ready "$digest"; then
+    # Mounted by the initramfs, or by `ik-os pkg install` in this boot.
+    uo_mounted || { uo_mount "$digest"; uo_reload; }
+    exit 0
+fi
+
+# A package the new image now ships is the image's business, not ours. It stays
+# in the list, so rolling back to an image without it still gets it back.
+todo=()
+for p in "${wanted[@]}"; do
+    if uo_is_base "$p"; then
+        uo_log "${p} is now part of the image; not installing it into the overlay"
+    else
+        todo+=("$p")
+    fi
+done
+
+fail() {
+    uo_log "replay failed: $*"
+    uo_umount
+    rm -rf -- "${dir:?}"
+    printf 'failed %s %s\n' "$(date -Is)" "$*" > "$UO_RESULT"
+    uo_notify critical "Your extra packages could not be reinstalled" \
+        "This machine is running the plain ik-os image. Retry with: sudo ik-os pkg rebuild"
+    exit 1
+}
+
+# Anything here is a half-built upper from an interrupted replay.
+rm -rf -- "${dir:?}"
+uo_mount "$digest" || fail "could not mount the overlay"
+uo_log "replaying ${#todo[@]} package(s) for deployment ${digest:0:12}"
+
+if (( ${#todo[@]} )); then
+    uo_apt update -q || fail "apt-get update"
+    uo_check_transaction install "${todo[@]}" || fail "the new image conflicts with: ${todo[*]}"
+    uo_apt install -q "${todo[@]}" || fail "apt-get install ${todo[*]}"
+    uo_apt clean || true
+fi
+
+touch "${dir}/ready"
+printf 'ok %s %s\n' "$(date -Is)" "${todo[*]}" > "$UO_RESULT"
+uo_reload
+uo_notify normal "Your extra packages are back" \
+    "Reinstalled on the new ik-os image: ${todo[*]}"

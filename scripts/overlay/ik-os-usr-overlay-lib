@@ -1,0 +1,179 @@
+#!/bin/bash
+# Shared by `ik-os pkg` and ik-os-usr-overlay-rebuild (ADR 0024). Sourced, not
+# run. Installed to /usr/libexec/ik-os/usr-overlay-lib.
+#
+# One overlay per deployment: the upper is keyed by the composefs digest on the
+# kernel command line, which is also bootc's deployment id. The package list is
+# the user's intent and is shared by every deployment; it is replayed into a
+# fresh upper for a new deployment rather than reconciled with an old one.
+
+UO_STATE=/var/lib/ik-os/usr-overlay
+UO_LIST="${UO_STATE}/packages.list"
+UO_LISTS="${UO_STATE}/apt-lists"
+# shellcheck disable=SC2034  # written by the rebuild script and `ik-os pkg`, which source this
+UO_RESULT="${UO_STATE}/last-result"
+UO_LOCK=/run/ik-os/usr-overlay.lock
+# The mount source. It is how everything else recognises our overlay, as
+# opposed to a transient `bootc usr-overlay`, which uses "transient".
+UO_SOURCE=ik-os-usr-overlay
+UO_MANIFEST=/usr/share/ik-os/packages.manifest
+UO_DENYLIST=/usr/share/ik-os/usr-overlay-denylist
+
+uo_log() { printf '[ik-os-usr-overlay] %s\n' "$*"; }
+
+# Under pipefail `producer | grep -q` reports a match as a failure (AGENTS.md);
+# capture first, then match.
+uo_matches() {
+    local pattern="$1"; shift
+    local out
+    out=$("$@" 2>/dev/null) || true
+    grep -q -- "$pattern" <<<"$out"
+}
+
+uo_digest() {
+    local arg
+    for arg in $(</proc/cmdline); do
+        case "$arg" in
+            # `composefs=?<hex>` marks a deployment booted without fs-verity.
+            composefs=*) arg="${arg#composefs=}"; printf '%s\n' "${arg#\?}"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
+uo_dir()     { printf '%s/%s\n' "$UO_STATE" "$1"; }
+uo_ready()   { [[ -e "$(uo_dir "$1")/ready" ]]; }
+uo_mounted() { [[ "$(findmnt -no SOURCE /usr 2>/dev/null)" == "$UO_SOURCE" ]]; }
+
+# Mount a fresh or existing upper for digest $1 on the running /usr. At boot the
+# initramfs does this before switch-root; this path is for the first install on
+# a deployment, and for replay after an update.
+uo_mount() {
+    local d; d=$(uo_dir "$1")
+    uo_mounted && return 0
+    mkdir -p "${d}/upper" "${d}/work"
+    chmod 0755 "${d}/upper"
+    mount -t overlay "$UO_SOURCE" \
+        -o "lowerdir=/usr,upperdir=${d}/upper,workdir=${d}/work" /usr
+}
+
+uo_umount() { uo_mounted && umount -l /usr; return 0; }
+
+# Units shipped by overlay packages are invisible to systemd until it rereads.
+uo_reload() { systemctl daemon-reload 2>/dev/null || true; }
+
+uo_packages() {
+    [[ -s "$UO_LIST" ]] || return 0
+    grep -v -e '^[[:space:]]*$' -e '^#' "$UO_LIST"
+}
+
+uo_list_add() {
+    mkdir -p "$UO_STATE"
+    touch "$UO_LIST"
+    local p
+    for p in "$@"; do
+        grep -qxF -- "$p" "$UO_LIST" || printf '%s\n' "$p" >> "$UO_LIST"
+    done
+}
+
+uo_list_remove() {
+    [[ -f "$UO_LIST" ]] || return 0
+    local p tmp; tmp=$(mktemp)
+    cp "$UO_LIST" "$tmp"
+    for p in "$@"; do
+        grep -vxF -- "$p" "$tmp" > "${tmp}.n" || true
+        mv "${tmp}.n" "$tmp"
+    done
+    install -m0644 "$tmp" "$UO_LIST"
+    rm -f "$tmp"
+}
+
+uo_is_base() {
+    # The manifest is `${binary:Package}\t...`, so a multiarch package appears
+    # as name:arch. Compare on the name: blocking the other architecture of a
+    # base package too is the conservative reading. No pipe: `cut | grep -q`
+    # under pipefail answered "not base" for every package (AGENTS.md).
+    awk -F'\t' -v p="${1%%:*}" '{ sub(/:.*/, "", $1) } $1 == p { f = 1; exit }
+        END { exit !f }' "$UO_MANIFEST"
+}
+
+uo_is_denied() {
+    local pkg="${1%%:*}" pat
+    [[ -r "$UO_DENYLIST" ]] || return 1
+    while read -r pat; do
+        [[ -z "$pat" || "$pat" == \#* ]] && continue
+        # shellcheck disable=SC2053  # the denylist entries are globs on purpose
+        [[ "$pkg" == $pat ]] && return 0
+    done < "$UO_DENYLIST"
+    return 1
+}
+
+# apt with the overlay's settings. The lock is what the DPkg::Pre-Invoke guard
+# (ik-os-apt-guard) looks for; without it, plain apt and dpkg are refused.
+uo_apt() {
+    mkdir -p "$UO_LISTS/partial" "$(dirname "$UO_LOCK")"
+    : > "$UO_LOCK"
+    local rc=0
+    DEBIAN_FRONTEND=noninteractive apt-get \
+        -o Dir::State::Lists="$UO_LISTS" \
+        -o Dpkg::Options::=--force-confold \
+        -o Dpkg::Options::=--force-confdef \
+        "$@" || rc=$?
+    rm -f "$UO_LOCK"
+    return "$rc"
+}
+
+# Simulate `apt-get <verb> <pkgs>` and refuse if the transaction would touch
+# the base image or install a denylisted package. Prints every reason.
+uo_check_transaction() {
+    local sim line verb pkg bad=0
+    sim=$(uo_apt -s "$@" 2>&1) || { printf '%s\n' "$sim" >&2; return 1; }
+    while read -r line; do
+        verb=${line%% *}
+        [[ "$verb" == Inst || "$verb" == Remv ]] || continue
+        pkg=${line#* }; pkg=${pkg%% *}
+        if uo_is_base "$pkg"; then
+            if [[ "$verb" == Inst ]]; then
+                echo "refused: ${pkg} is part of the ik-os image; the overlay cannot upgrade or replace it" >&2
+            else
+                echo "refused: removing ${pkg} would remove part of the ik-os image" >&2
+            fi
+            bad=1
+        elif [[ "$verb" == Inst ]] && uo_is_denied "$pkg"; then
+            echo "refused: ${pkg} matches the overlay denylist (${UO_DENYLIST}, ADR 0024)" >&2
+            bad=1
+        fi
+    done <<<"$sim"
+    (( bad == 0 )) || echo "Change the image for this instead; see docs/adr/0024-persistent-usr-overlay.md" >&2
+    return "$bad"
+}
+
+# Deployments bootc still knows about. Anything else in UO_STATE is garbage.
+uo_live_digests() {
+    bootc status --json 2>/dev/null | jq -r '
+        .status | [.booted, .staged, .rollback] + (.otherDeployments // [])
+        | .[] | select(. != null) | .composefs.verity // empty'
+}
+
+uo_gc() {
+    local live d name
+    live=$(uo_live_digests) || return 0
+    # Never collect on an empty answer: a failed `bootc status` would otherwise
+    # delete every overlay, including the one this deployment is using.
+    [[ -n "$live" ]] || return 0
+    for d in "$UO_STATE"/*/; do
+        name=$(basename "$d")
+        [[ "$name" =~ ^[0-9a-f]{64,128}$ ]] || continue
+        grep -qxF -- "$name" <<<"$live" && continue
+        uo_log "removing the overlay of deployment ${name:0:12}, which no longer exists"
+        rm -rf -- "${UO_STATE:?}/${name}"
+    done
+}
+
+# Tell whoever is logged in. Never fail over a cosmetic message.
+uo_notify() {
+    local urgency="$1" summary="$2" body="${3:-}" u
+    while read -r u; do
+        /usr/libexec/ik-os/ik-os-notify "$u" "$urgency" "$summary" "$body" || true
+    done < <(loginctl list-users --no-legend 2>/dev/null | awk '$1 >= 1000 {print $2}')
+}

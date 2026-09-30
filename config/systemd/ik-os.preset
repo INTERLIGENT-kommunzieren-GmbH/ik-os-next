@@ -12,6 +12,8 @@ enable ik-os-user-groups.path
 enable ik-os-homebrew.service
 enable ik-os-homebrew.path
 enable ik-os-update.timer
+# ADR 0024 — replays the user's overlay packages onto a new image.
+enable ik-os-usr-overlay-rebuild.service
 # The loopback service that puts the company video backgrounds into the Teams
 # picker (ADR 0020). It is the only listening port this image adds, on
 # 127.0.0.1:8421, and Teams is useless to us without it once the Flatpak is

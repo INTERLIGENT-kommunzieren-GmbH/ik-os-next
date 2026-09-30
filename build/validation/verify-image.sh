@@ -1101,5 +1101,39 @@ no_vendor_agent_unit() {
 }
 check "no vendor agent unit is baked in"     no_vendor_agent_unit
 
+echo "-- persistent package overlay (ADR 0024) --"
+KVER_OV=$(find /usr/lib/modules -mindepth 1 -maxdepth 1 -printf '%f\n' | sort -V | tail -1)
+check "the overlay module is in the initramfs" \
+    out_has 'ik-os-usr-overlay.service' lsinitrd "/usr/lib/modules/${KVER_OV}/initramfs.img"
+check "the initrd mount runs after bootc-root-setup" \
+    out_has 'After=bootc-root-setup.service' cat /usr/lib/dracut/modules.d/90ik-os-usr-overlay/ik-os-usr-overlay.service
+check "the overlay tooling is installed"     test -x /usr/libexec/ik-os/ik-os-usr-overlay-rebuild -a -r /usr/libexec/ik-os/usr-overlay-lib
+check "the rebuild unit is enabled"          test -e /etc/systemd/system/multi-user.target.wants/ik-os-usr-overlay-rebuild.service
+check "the rebuild unit does not hold back the login screen" \
+    bash -c '! grep -q "^Before=.*gdm" /usr/lib/systemd/system/ik-os-usr-overlay-rebuild.service'
+check "plain apt/dpkg is guarded on the host" test -x /usr/libexec/ik-os/ik-os-apt-guard -a -r /etc/apt/apt.conf.d/99-ik-os-usr-overlay
+check "dpkg runs the guard itself"            grep -qx 'pre-invoke=/usr/libexec/ik-os/ik-os-apt-guard' /etc/dpkg/dpkg.cfg.d/ik-os-usr-overlay
+check "apt update runs the guard"             grep -q 'APT::Update::Pre-Invoke' /etc/apt/apt.conf.d/99-ik-os-usr-overlay
+overlay_base_detected() {
+    # Regression: a pipefail `cut | grep -q` made every base package look new.
+    # shellcheck source=scripts/overlay/ik-os-usr-overlay-lib
+    ( . /usr/libexec/ik-os/usr-overlay-lib; uo_is_base bash && uo_is_base systemd && ! uo_is_base ik-os-no-such-package )
+}
+check "the overlay recognises base packages"  overlay_base_detected
+check "the guard lets container builds through" /usr/libexec/ik-os/ik-os-apt-guard
+check "the denylist covers kernels and DKMS" \
+    bash -c 'grep -qx "linux-image-\*" /usr/share/ik-os/usr-overlay-denylist && grep -qx "\*-dkms" /usr/share/ik-os/usr-overlay-denylist'
+# The base guard reads the release manifest; if that went stale, the overlay
+# could upgrade a base package it does not know is one.
+manifest_matches_dpkg() {
+    # /var is empty in the image; /var/lib/dpkg only appears at boot, as a
+    # tmpfiles symlink to the relocated database (95-finalize.sh).
+    diff -q <(cut -f1 /usr/share/ik-os/packages.manifest | LC_ALL=C sort) \
+            <(dpkg-query --admindir=/usr/lib/dpkg -W -f='${binary:Package}\n' | LC_ALL=C sort)
+}
+check "the base manifest matches the dpkg database" manifest_matches_dpkg
+check "ik-os pkg is wired up"                out_has 'ik-os pkg' ik-os --help
+check "sysroot stays read-only"              grep -q 'readonly = true' /usr/lib/ostree/prepare-root.conf
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]] || { echo "image verification FAILED"; exit 1; }
