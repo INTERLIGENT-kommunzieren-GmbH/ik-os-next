@@ -108,7 +108,7 @@ either:
 **Pre-M1.** The image builds end to end and passes `bootc container lint` plus
 all 300 in-container acceptance checks:
 
-    Debian 14 (forky) · pinned kernel 7.1.13-1 (7.1.13+deb14-amd64)
+    Debian 14 (forky) · pinned kernel 7.2.6-1 (7.2.6+deb14-amd64)
     bootc 1.16.9 (from source) · ostree 2026.4 + composefs 1.0.8 (Debian packages)
     GNOME Shell 50.4 · Docker 28.5.2 · Compose v2.40.3
 
