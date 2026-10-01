@@ -46,6 +46,11 @@ if [[ "${CLAUDE_DESKTOP:-false}" == "true" ]]; then
 
     install -Dm0644 "${CTX}/config/apt/claude-desktop.sources" \
         /etc/apt/sources.list.d/claude-desktop.sources
+    # The package's postinst registers the same repository again as
+    # claude-desktop.list, and apt then warns on every run. This is its
+    # documented opt-out; it must exist before the package is installed.
+    install -d /etc/default
+    echo 'CLAUDE_DESKTOP_ADD_REPO=false' > /etc/default/claude-desktop
 else
     info "CLAUDE_DESKTOP=false; Anthropic repository not configured"
 fi

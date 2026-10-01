@@ -1,0 +1,37 @@
+#!/bin/sh
+# Mount this deployment's package overlay on /sysroot/usr before switch-root
+# (ADR 0024). Runs after bootc-root-setup.service has assembled /sysroot, when
+# /sysroot/var is already the shared state/os/default/var.
+#
+# Mounting here rather than from a unit in the real root means systemd sees units
+# shipped by overlay packages from its very first load, and nothing that started
+# early is left holding the plain /usr.
+#
+# Never fails the boot. An overlay that cannot be mounted leaves the plain image,
+# which is always a working system, and ik-os-usr-overlay-rebuild rebuilds it.
+
+log() { echo "ik-os-usr-overlay: $*" > /dev/kmsg 2>/dev/null || echo "ik-os-usr-overlay: $*"; }
+
+digest=""
+for arg in $(cat /proc/cmdline); do
+    case "$arg" in
+        composefs=*) digest="${arg#composefs=}"; digest="${digest#\?}" ;;
+    esac
+done
+[ -n "$digest" ] || exit 0
+
+dir="/sysroot/var/lib/ik-os/usr-overlay/${digest}"
+if [ ! -e "${dir}/ready" ]; then
+    # A new deployment, or one whose replay never finished.
+    exit 0
+fi
+
+mkdir -p "${dir}/work"
+if mount -t overlay ik-os-usr-overlay \
+        -o "lowerdir=/sysroot/usr,upperdir=${dir}/upper,workdir=${dir}/work" \
+        /sysroot/usr; then
+    log "mounted the package overlay for ${digest%"${digest#????????????}"}"
+else
+    log "could not mount the package overlay; booting the plain image"
+fi
+exit 0

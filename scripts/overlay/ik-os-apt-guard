@@ -1,0 +1,59 @@
+#!/bin/sh
+# apt and dpkg hook (ADR 0024). On a booted ik-os host, packages are changed
+# only through `ik-os pkg`: a package installed any other way is not in
+# packages.list, so it silently disappears at the next image update.
+#
+#   $1 = dpkg     dpkg pre-invoke        (config/dpkg/ik-os-usr-overlay)
+#        update   APT::Update::Pre-Invoke
+#        install  AptCli::Hooks::Install (apt/apt-get install, remove, purge)
+#        upgrade  AptCli::Hooks::Upgrade (upgrade, dist-upgrade, full-upgrade)
+#        search   AptCli::Hooks::Search  -- a hint only, never refused
+#
+# The AptCli hooks speak a JSON protocol on APT_HOOK_SOCKET. This one does not
+# answer it: exiting non-zero stops apt before it resolves anything, and
+# exiting 0 lets it carry on.
+#
+# Builds are left alone. A derived image (`FROM ik-os-next`) runs apt in a
+# container, and the container sees the host's /proc/cmdline, so the composefs
+# check alone is not enough.
+[ -e /run/ik-os/usr-overlay.lock ] && exit 0
+[ -e /run/.containerenv ] || [ -e /.dockerenv ] && exit 0
+systemd-detect-virt --quiet --container 2>/dev/null && exit 0
+grep -q 'composefs=' /proc/cmdline 2>/dev/null || exit 0
+
+# apt runs a CLI hook more than once per command (before, and again after or
+# on failure), each time through its own `sh -c`. Say it once per apt process:
+# the grandparent, field 2 after the ")" that closes comm in /proc/PID/stat.
+once() {
+    [ -n "${APT_HOOK_SOCKET:-}" ] || return 0
+    apt_pid=$(sed 's/.*) //' "/proc/${PPID}/stat" 2>/dev/null | cut -d' ' -f2)
+    seen="${TMPDIR:-/tmp}/ik-os-apt-guard.${apt_pid:-$PPID}"
+    [ -e "$seen" ] && return 1
+    : > "$seen" 2>/dev/null || true
+}
+
+if [ "${1:-}" = search ]; then
+    # `ik-os pkg search` itself; honoured for this read-only hint only.
+    [ -n "${IK_OS_PKG:-}" ] && exit 0
+    once && echo "ik-os: apt's own package lists are empty here; use: ik-os pkg search <term>" >&2
+    exit 0
+fi
+
+once || exit 1
+
+if [ "${1:-}" = upgrade ] && [ -r /usr/lib/ik-os/apt-immutable-notice ]; then
+    cat /usr/lib/ik-os/apt-immutable-notice >&2
+    exit 1
+fi
+
+cat >&2 <<'EOF'
+ik-os: apt and dpkg are not used directly on this machine.
+
+  sudo ik-os pkg install <package>    add a Debian package that persists across updates
+  sudo ik-os pkg remove <package>
+  ik-os pkg search <term>
+  ik-os pkg list
+
+Anything installed with plain apt would vanish at the next image update.
+EOF
+exit 1

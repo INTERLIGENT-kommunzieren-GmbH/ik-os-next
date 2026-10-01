@@ -1,0 +1,4 @@
+# ADR 0024 — refuse dpkg on a booted host unless `ik-os pkg` holds the lock.
+# dpkg runs this before any action that changes its database, whether it was
+# started by apt or by hand (`dpkg -i`), which apt's own hooks do not cover.
+pre-invoke=/usr/libexec/ik-os/ik-os-apt-guard dpkg

@@ -62,7 +62,7 @@ cmd_status() {
 }
 
 cmd_update() {
-    need_root "$@"
+    need_root update "$@"
     bold "Fetching the current ${IK_OS_UPDATE_CHANNEL:-stable} image"
     # SDD §40 — image-based updates only. apt upgrade against the host is not
     # a supported operation.
@@ -73,7 +73,7 @@ cmd_update() {
 }
 
 cmd_rollback() {
-    need_root "$@"
+    need_root rollback "$@"
     bold "Rolling back to the previous deployment"
     # SDD §42 — rollback must never touch persistent user data.
     bootc rollback
@@ -165,6 +165,13 @@ cmd_diagnostics() {
         echo
         bold "Homebrew"
         kv "Version" "$(sudo -u "${SUDO_USER:-${USER:-$(id -un)}}" /home/linuxbrew/.linuxbrew/bin/brew --version 2>/dev/null | head -1)"
+        echo
+        # ADR 0024 — per-machine state IT cannot otherwise see.
+        bold "Package overlay"
+        kv "/usr" "$(findmnt -no SOURCE /usr 2>/dev/null || echo 'part of /')"
+        kv "Last replay" "$(cat /var/lib/ik-os/usr-overlay/last-result 2>/dev/null || echo never)"
+        grep -v -e '^[[:space:]]*$' -e '^#' /var/lib/ik-os/usr-overlay/packages.list 2>/dev/null \
+            | sed 's/^/    /' || echo "    none"
         echo
         bold "Printing"
         kv "CUPS" "$(cupsd -v 2>/dev/null || systemctl is-active cups.service)"
@@ -388,6 +395,125 @@ cmd_ssh() {
     esac
 }
 
+cmd_pkg() {
+    # ADR 0024 — Debian packages in a persistent overlay on /usr. One overlay
+    # per deployment; the list is replayed onto every new image by
+    # ik-os-usr-overlay-rebuild.service. The base image is never changed.
+    local lib=/usr/libexec/ik-os/usr-overlay-lib
+    [[ -r "$lib" ]] || { echo "this image has no package overlay" >&2; exit 1; }
+    # shellcheck source=scripts/overlay/ik-os-usr-overlay-lib
+    . "$lib"
+    local action="${1:-list}"; (( $# )) && shift
+    local digest="" dir="" p
+    digest=$(uo_digest) || true
+    [[ -n "$digest" ]] && dir=$(uo_dir "$digest")
+
+    case "$action" in
+      list)
+        uo_packages
+        ;;
+      search|show)
+        # Read-only, so no root needed once the overlay's lists exist; plain
+        # `apt search` reads apt's default lists, which are empty here.
+        (( $# )) || { echo "usage: ik-os pkg ${action} <term>..." >&2; exit 2; }
+        if ! compgen -G "${UO_LISTS}/*_Packages*" >/dev/null; then
+            need_root pkg "$action" "$@"
+            uo_apt update -qq || exit 1
+        fi
+        IK_OS_PKG=1 apt-cache -o Dir::State::Lists="$UO_LISTS" "$action" "$@"
+        ;;
+      status)
+        kv "Deployment" "${digest:0:12}"
+        kv "Overlay mounted" "$(uo_mounted && echo yes || echo no)"
+        kv "Built for this image" "$([[ -n "$digest" ]] && uo_ready "$digest" && echo yes || echo no)"
+        kv "Packages" "$(uo_packages | wc -l)"
+        kv "Last replay" "$(cat "$UO_RESULT" 2>/dev/null || echo never)"
+        ;;
+      install)
+        need_root pkg install "$@"
+        (( $# )) || { echo "usage: ik-os pkg install <package>..." >&2; exit 2; }
+        [[ -n "$digest" ]] || { echo "not booted from a composefs deployment" >&2; exit 1; }
+        for p in "$@"; do
+            # Local .deb files stay prohibited (SDD §24, Rule 5); flags would let
+            # apt be steered around the transaction check.
+            if [[ "$p" == -* || "$p" == */* || "$p" == *.deb ]]; then
+                echo "refused: ${p} — only package names from the configured archives" >&2; exit 1
+            fi
+            if uo_is_base "$p"; then
+                echo "${p} is already part of the ik-os image" >&2; exit 1
+            fi
+        done
+        if ! uo_ready "$digest" && [[ -n "$(uo_packages)" ]]; then
+            echo "Your packages have not been reinstalled on this image yet." >&2
+            echo "Run: sudo ik-os pkg rebuild" >&2
+            exit 1
+        fi
+        local fresh=0
+        uo_ready "$digest" || fresh=1
+        abandon() {
+            # A fresh upper that failed is thrown away, so the next boot is
+            # plain rather than half-installed.
+            if (( fresh )); then uo_umount; rm -rf -- "${dir:?}"; fi
+            exit 1
+        }
+        uo_mount "$digest" || { echo "could not mount the overlay on /usr" >&2; exit 1; }
+        uo_apt update -q || abandon
+        uo_check_transaction install "$@" || abandon
+        uo_apt install "$@" || abandon
+        uo_apt clean || true
+        touch "${dir}/ready"
+        uo_list_add "$@"
+        uo_reload
+        echo
+        echo "Installed: $*"
+        echo "They persist across updates and are reinstalled on every new image."
+        ;;
+      remove)
+        need_root pkg remove "$@"
+        (( $# )) || { echo "usage: ik-os pkg remove <package>..." >&2; exit 2; }
+        for p in "$@"; do
+            grep -qxF -- "$p" <<<"$(uo_packages)" \
+                || { echo "${p} was not installed with ik-os pkg" >&2; exit 1; }
+        done
+        # A listed package the image now ships is only dropped from the list:
+        # the image owns it, and the rebuild already skips it.
+        local -a apt_pkgs=()
+        for p in "$@"; do
+            uo_is_base "$p" && echo "${p} is part of the ik-os image; it stays installed" \
+                || apt_pkgs+=("$p")
+        done
+        if uo_mounted && (( ${#apt_pkgs[@]} )); then
+            uo_check_transaction remove --autoremove "${apt_pkgs[@]}" || exit 1
+            uo_apt remove --autoremove "${apt_pkgs[@]}" || exit 1
+        fi
+        uo_list_remove "$@"
+        if [[ -z "$(uo_packages)" ]]; then
+            # Nothing left: boot the plain image next time.
+            rm -f "$UO_STATE"/*/ready
+        fi
+        uo_reload
+        echo "Removed: $*"
+        ;;
+      reset)
+        need_root pkg reset "$@"
+        # Kept, truncated rather than deleted, so the rebuild unit's
+        # ConditionPathExists still lets it run and clean up.
+        : > "$UO_LIST"
+        rm -f "$UO_STATE"/*/ready
+        echo "Every overlay package is dropped at the next reboot, on every deployment."
+        echo "The machine will then run the plain ik-os image."
+        ;;
+      rebuild)
+        need_root pkg rebuild "$@"
+        [[ -n "$digest" ]] || { echo "not booted from a composefs deployment" >&2; exit 1; }
+        rm -f "${dir}/ready"
+        uo_umount
+        /usr/libexec/ik-os/ik-os-usr-overlay-rebuild
+        ;;
+      *) echo "usage: ik-os pkg [list|search|show|status|install|remove|reset|rebuild]" >&2; exit 2 ;;
+    esac
+}
+
 cmd_enroll_mok() {
     # SDD §5, §50, ADR 0002. Debian has no signed systemd-boot, so ik-os signs it
     # with a company Machine Owner Key; the firmware will not run that binary
@@ -522,8 +648,12 @@ ik-os — Interligent developer workstation
   ik-os ssh [status|enable|disable]
                                 Temporarily allow SSH in for debugging.
                                 Transient: reverts on reboot (SDD §50)
+  ik-os pkg [list|search|show|status|install|remove|reset|rebuild] [package...]
+                                Debian packages in a persistent overlay on
+                                /usr, reinstalled on every new image (ADR 0024)
 
-Updates are image-based. `apt upgrade` against the host is not supported.
+Updates are image-based. `apt upgrade` against the host is not supported;
+plain apt and dpkg are refused. Use `ik-os pkg` for packages.
 EOF
 }
 
@@ -537,6 +667,7 @@ case "${1:-}" in
     selftest)    shift; cmd_selftest "$@" ;;
     enroll-mok)  shift; cmd_enroll_mok "$@" ;;
     ssh)         shift; cmd_ssh "$@" ;;
+    pkg)         shift; cmd_pkg "$@" ;;
     -h|--help|help|"") usage ;;
     *) echo "unknown command: $1" >&2; usage >&2; exit 2 ;;
 esac

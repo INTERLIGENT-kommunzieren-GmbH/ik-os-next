@@ -1,0 +1,28 @@
+# Packages `ik-os pkg` refuses to put in the /usr overlay (ADR 0024).
+# Shell globs, matched against the package name (without :arch). This applies to
+# every package in a transaction, including the dependencies the user did not name.
+
+# Kernels and out-of-tree modules: the initramfs is not rebuilt, and modules
+# not signed by the company MOK do not load under Secure Boot (ADR 0002).
+linux-image-*
+linux-headers-*
+linux-modules-*
+*-dkms
+dkms
+
+# The boot and update stack belongs to the image alone.
+bootc
+ostree
+ostree-boot
+composefs
+dracut
+dracut-*
+grub*
+shim*
+systemd-boot*
+
+# The GNOME Shell extension set is pinned (desktop/gnome/extensions/versions.lock).
+gnome-shell-extension-*
+
+# Docker is required; Podman may be present but must not replace it.
+podman-docker

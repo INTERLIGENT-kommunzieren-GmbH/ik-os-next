@@ -16,6 +16,16 @@ systemdsystemunitdir=/usr/lib/systemd/system
 EOF
 install -Dm0644 "${CTX}/config/boot/dracut-ik-os.conf" /usr/lib/dracut/dracut.conf.d/50-ik-os.conf
 
+# The persistent package overlay is mounted from the initramfs, after
+# bootc-root-setup has assembled /sysroot (ADR 0024).
+OVERLAY_MOD=/usr/lib/dracut/modules.d/90ik-os-usr-overlay
+install -Dm0755 "${CTX}/config/boot/dracut/90ik-os-usr-overlay/module-setup.sh" \
+    "${OVERLAY_MOD}/module-setup.sh"
+install -Dm0755 "${CTX}/config/boot/dracut/90ik-os-usr-overlay/ik-os-usr-overlay-initrd" \
+    "${OVERLAY_MOD}/ik-os-usr-overlay-initrd"
+install -Dm0644 "${CTX}/config/boot/dracut/90ik-os-usr-overlay/ik-os-usr-overlay.service" \
+    "${OVERLAY_MOD}/ik-os-usr-overlay.service"
+
 dracut --force --no-hostonly --kver "${KVER}" --reproducible --zstd -v \
        "/usr/lib/modules/${KVER}/initramfs.img"
 chmod 0600 "/usr/lib/modules/${KVER}/initramfs.img"
@@ -52,4 +62,12 @@ if ! output_matches 'systemd-cryptsetup' lsinitrd "/usr/lib/modules/${KVER}/init
        install and then fail to boot. Check that the crypt and
        systemd-cryptsetup modules are in config/boot/dracut-ik-os.conf and
        that cryptsetup is in packages/base/packages.list."
+fi
+
+# Without it, `ik-os pkg` still installs, but the packages are gone after every
+# reboot until the rebuild service replays them: correct, and slow enough that
+# nobody would call it working.
+if ! output_matches 'ik-os-usr-overlay.service' lsinitrd "/usr/lib/modules/${KVER}/initramfs.img"; then
+    die "the initramfs has no ik-os-usr-overlay module (ADR 0024).
+       Check add_dracutmodules in config/boot/dracut-ik-os.conf."
 fi

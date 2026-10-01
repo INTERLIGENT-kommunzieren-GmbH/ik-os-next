@@ -37,7 +37,7 @@ install -Dm0644 "${CTX}/config/hostname" /usr/share/ik-os/hostname
 # validated without a checkout. `ik-os selftest` runs them.
 install -d /usr/share/ik-os/tests
 install -Dm0644 "${CTX}/tests/lib.sh" /usr/share/ik-os/tests/lib.sh
-for suite in boot docker printing provisioning hardware; do
+for suite in boot docker printing provisioning hardware overlay; do
     src="${CTX}/tests/${suite}/test-${suite}.sh"
     [[ -f "$src" ]] || die "tests/${suite}/test-${suite}.sh is missing; ik-os
        selftest would silently skip it."
@@ -68,8 +68,22 @@ supported here and their effects are discarded on the next update.
   Project dependency ....... a container (Containerfile / compose.yaml)
   Something the OS needs ... change the image, open a PR
 
+A Debian package that exists nowhere else can go in the persistent overlay,
+which survives updates:  sudo ik-os pkg install <package>  (ADR 0024)
+
 See /usr/share/doc/ik-os/ and SDD §54.
 EOF
+
+# ADR 0024 — the persistent package overlay on /usr. The initramfs half is
+# installed by 57-initramfs.sh, the rebuild unit by 85-systemd.sh.
+install -Dm0644 "${CTX}/scripts/overlay/ik-os-usr-overlay-lib"     /usr/libexec/ik-os/usr-overlay-lib
+install -Dm0755 "${CTX}/scripts/overlay/ik-os-usr-overlay-rebuild" /usr/libexec/ik-os/ik-os-usr-overlay-rebuild
+install -Dm0755 "${CTX}/scripts/overlay/ik-os-apt-guard"           /usr/libexec/ik-os/ik-os-apt-guard
+install -Dm0644 "${CTX}/config/security/usr-overlay-denylist"      /usr/share/ik-os/usr-overlay-denylist
+# Last, so no build step's apt run meets it. The guard also exempts containers,
+# which is what keeps derived images buildable.
+install -Dm0644 "${CTX}/config/apt/99-ik-os-usr-overlay.conf" /etc/apt/apt.conf.d/99-ik-os-usr-overlay
+install -Dm0644 "${CTX}/config/dpkg/ik-os-usr-overlay"        /etc/dpkg/dpkg.cfg.d/ik-os-usr-overlay
 
 /usr/bin/ik-os --help >/dev/null || die "the ik-os CLI does not run"
 info "ik-os CLI installed"

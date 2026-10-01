@@ -182,6 +182,15 @@ Developers MUST NOT normally modify `/usr` or install arbitrary Debian packages 
 
 Host modifications MUST be performed by changing the OS image and publishing a new release.
 
+The persistent apt overlay is the one sanctioned exception (ADR 0024). A user
+MAY install Debian archive packages through `ik-os pkg`. They land in a
+writable overlay on `/usr` that belongs to one deployment and lives in `/var`.
+Every new deployment gets a fresh overlay, and the user's package list is
+replayed into it. The overlay MUST NOT change, replace or remove any package in
+the base image. It MUST NOT carry kernels, kernel modules, GNOME Shell
+extensions or the boot and update stack. `/` stays read-only, and the composefs
+base keeps its verification.
+
 ---
 
 ## 5. Boot
@@ -1125,6 +1134,11 @@ ik-os rollback
 ik-os version
 ```
 
+Packages in the persistent overlay (§4, ADR 0024) are managed only through
+`ik-os pkg`. Plain `apt` and `dpkg` are refused on the host. An image update
+never upgrades an overlay package in place: the list is reinstalled into a new
+overlay for the new deployment.
+
 ---
 
 ## 41. Update Safety
@@ -1551,7 +1565,7 @@ An implementation agent MUST follow these rules.
 
 **Rule 3** — Do not compile the kernel from source unless explicitly requested. Use Debian Backports.
 
-**Rule 4** — Do not install development dependencies into the immutable host unless they are explicitly part of the OS specification. Prefer Flatpak, Homebrew or OCI containers.
+**Rule 4** — Do not install development dependencies into the immutable host unless they are explicitly part of the OS specification. Prefer Flatpak, Homebrew or OCI containers. The persistent overlay (§4, ADR 0024) is the per-machine fallback when none of those works. It is not a place for what every developer needs; that goes in the image.
 
 **Rule 5** — Do not install arbitrary proprietary printer `.deb` packages directly into `/usr`.
 
